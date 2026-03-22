@@ -7,10 +7,17 @@ Pulling App Store info off of this old API from 2017[^2].
 ## Todo
 - ~~Flesh out the schema~~
 - google-play-scraper not pulling enough apps, need to change from `search` to `collection` for better results
-- Rewrite crawling logic
+- ~~Rewrite crawling logic~~
 - ~~Dev as model?~~
 - ~~Include app version in schema~~
 - Cloud compatibility
-
+## To run
+```shell=
+pip install -r requirements.txt
+docker compose up -d
+python3 main.py
+psql -h localhost -p 5433 -U crawler -d appcrawler
+(passwrd: crawlerpass)
+```
 [^1]: https://github.com/JoMingyu/google-play-scraper
 [^2]: https://performance-partners.apple.com/search-api
