@@ -18,7 +18,10 @@ Pulling App Store info off of this old API from 2017[^2].
 pip install -r requirements.txt
 docker compose up -d
 python3 main.py
-psql -h localhost -p 5433 -U crawler -d appcrawler
+## To check-in the db
+psql -h localhost -p 5433 -U crawler -d appcrawler -f report.sql
+## To plot graph
+python3 ./tools/visualize.py
 (passwrd: crawlerpass)
 ```
 [^1]: https://github.com/JoMingyu/google-play-scraper
