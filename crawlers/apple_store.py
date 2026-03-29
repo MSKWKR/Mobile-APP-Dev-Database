@@ -155,7 +155,7 @@ def process_category(category_id: str, category_desc: str, app_ids: list[str], c
 # ──────────────────────────────────────────────
 
 def crawl_app_store():
-    with open("apple-appstore-categories.json", "r") as f:
+    with open("categories/apple-appstore-categories.json", "r") as f:
         categories_data = json.load(f)
 
     while True:

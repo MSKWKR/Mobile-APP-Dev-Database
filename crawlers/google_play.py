@@ -54,7 +54,7 @@ def process_app(app_id, category_desc):
 
 def crawl_google_play():
 
-    with open("google-play-apps-categories.json", "r") as f:
+    with open("categories/google-play-apps-categories.json", "r") as f:
         categories_data = json.load(f)
 
     while True:
