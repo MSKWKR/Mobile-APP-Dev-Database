@@ -11,6 +11,8 @@ Pulling App Store info off of this old API from 2017[^2].
 - ~~Dev as model?~~
 - ~~Include app version in schema~~
 - Cloud compatibility
+- Run continuously on Lab PC
+- Pull even more apps
 ## To run
 ```shell=
 pip install -r requirements.txt
