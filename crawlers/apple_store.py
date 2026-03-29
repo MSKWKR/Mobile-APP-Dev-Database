@@ -13,12 +13,13 @@ STORE = "app_store"
 MAX_APPS_PER_CATEGORY = 200
 BATCH_SIZE = 200
 
-COUNTRIES = ["us", "gb", "cn", "jp", "kr", "de", "fr", "br", "in", "au", "tw"]
+# Major markets — covers ~90% of the global App Store catalog
+COUNTRIES = ["us", "gb", "cn", "jp", "kr", "de", "fr", "br", "in", "au", "tw"]          # iTunes lookup accepts up to 200 IDs per request
 
-WAIT_MIN = 1.0
-WAIT_MAX = 2.0
-CATEGORY_WAIT_MIN = 5.0
-CATEGORY_WAIT_MAX = 10.0
+WAIT_MIN = 0.5
+WAIT_MAX = 1.0
+CATEGORY_WAIT_MIN = 1.0
+CATEGORY_WAIT_MAX = 2.0
 
 HEADERS = {
     "User-Agent": (
@@ -28,26 +29,46 @@ HEADERS = {
     )
 }
 
+COLLECTIONS = [
+    "topfreeapplications",
+    "topgrossingapplications",
+    "newapplications",
+]
+
+# ──────────────────────────────────────────────
+# iTunes API helpers
+# ──────────────────────────────────────────────
+
 def _search_category(category_id: str, country: str, limit: int = MAX_APPS_PER_CATEGORY) -> list[str]:
     """
-    Fetch top free app IDs for a category via the iTunes RSS feed.
-    Returns a list of trackId strings.
+    Fetch app IDs across all collections for a category via the iTunes RSS feed.
+    Deduplicates across collections. Returns a list of trackId strings.
     """
     capped = min(limit, 200)
-    url = (
-        f"https://itunes.apple.com/{country}/rss/topfreeapplications"
-        f"/limit={capped}/genre={category_id}/json"
-    )
-    resp = requests.get(url, headers=HEADERS, timeout=15)
-    resp.raise_for_status()
-
-    entries = resp.json().get("feed", {}).get("entry", [])
-
+    seen = set()
     app_ids = []
-    for entry in entries:
+
+    for collection in COLLECTIONS:
+        url = (
+            f"https://itunes.apple.com/{country}/rss/{collection}"
+            f"/limit={capped}/genre={category_id}/json"
+        )
         try:
-            app_ids.append(entry["id"]["attributes"]["im:id"])
-        except (KeyError, TypeError):
+            resp = requests.get(url, headers=HEADERS, timeout=15)
+            resp.raise_for_status()
+            entries = resp.json().get("feed", {}).get("entry", [])
+
+            for entry in entries:
+                try:
+                    aid = entry["id"]["attributes"]["im:id"]
+                    if aid not in seen:
+                        seen.add(aid)
+                        app_ids.append(aid)
+                except (KeyError, TypeError):
+                    continue
+
+        except Exception as e:
+            print(f"[WARN] collection {collection} failed for {category_id}/{country}: {e}")
             continue
 
     return app_ids
@@ -76,7 +97,12 @@ def _fetch_batch(app_ids: list[str], country: str, retries: int = 3) -> list[dic
 
     return []
 
-def process_category(category_id: str, app_ids: list[str], country: str) -> int:
+
+# ──────────────────────────────────────────────
+# Core worker
+# ──────────────────────────────────────────────
+
+def process_category(category_id: str, category_desc: str, app_ids: list[str], country: str) -> int:
     """
     Fetch all app details for a category in batches, persist to DB.
     Returns the count of successfully inserted apps.
@@ -105,7 +131,7 @@ def process_category(category_id: str, app_ids: list[str], country: str) -> int:
                     store=STORE,
                     app_id=str(app_info.get("trackId")),
                     app_name=app_info.get("trackName"),
-                    category=category_id,
+                    category=category_desc,
                 )
 
                 version = app_info.get("version")
@@ -123,44 +149,52 @@ def process_category(category_id: str, app_ids: list[str], country: str) -> int:
 
     return inserted
 
+
+# ──────────────────────────────────────────────
+# Main crawler
+# ──────────────────────────────────────────────
+
 def crawl_app_store():
     with open("apple-appstore-categories.json", "r") as f:
         categories_data = json.load(f)
 
-    seen_app_ids: set[str] = set()  # deduplicate across countries + categories
+    while True:
+        seen_app_ids: set[str] = set()  # reset deduplication each full run
 
-    for country in COUNTRIES:
-        print(f"\n{'='*50}")
-        print(f"  Country: {country.upper()}")
-        print(f"{'='*50}")
+        for country in COUNTRIES:
+            print(f"\n{'='*50}")
+            print(f"  Country: {country.upper()}")
+            print(f"{'='*50}")
 
-        for cat_entry in categories_data:
+            for cat_entry in categories_data:
 
-            category_id   = cat_entry["category"]
-            category_desc = cat_entry.get("category_description", category_id)
+                category_id   = cat_entry["category"]
+                category_desc = cat_entry.get("category_description", category_id)
 
-            print(f"\n=== [{country}] {category_id} ({category_desc}) ===")
+                print(f"\n=== [{country}] {category_id} ({category_desc}) ===")
 
-            try:
-                app_ids = _search_category(category_id, country)
-            except Exception as e:
-                print(f"[ERROR] search failed: {e}")
-                continue
+                try:
+                    app_ids = _search_category(category_id, country)
+                except Exception as e:
+                    print(f"[ERROR] search failed: {e}")
+                    continue
 
-            # Filter out apps already inserted from another country
-            new_ids = [aid for aid in app_ids if aid not in seen_app_ids]
+                new_ids = [aid for aid in app_ids if aid not in seen_app_ids]
 
-            if not new_ids:
-                print(f"[SKIP] all apps already seen")
-                continue
+                if not new_ids:
+                    print(f"[SKIP] all apps already seen")
+                    continue
 
-            count = process_category(category_id, new_ids, country)
-            seen_app_ids.update(new_ids)
-            print(f"[{country}/{category_id}] done — {count} new apps inserted ({len(app_ids) - len(new_ids)} dupes skipped)")
+                count = process_category(category_id, category_desc, new_ids, country)
+                seen_app_ids.update(new_ids)
+                print(f"[{country}/{category_id}] done — {count} new apps inserted ({len(app_ids) - len(new_ids)} dupes skipped)")
 
-            cooldown = random.uniform(CATEGORY_WAIT_MIN, CATEGORY_WAIT_MAX)
-            print(f"[COOLDOWN] {cooldown:.1f}s...")
-            time.sleep(cooldown)
+                cooldown = random.uniform(CATEGORY_WAIT_MIN, CATEGORY_WAIT_MAX)
+                print(f"[COOLDOWN] {cooldown:.1f}s...")
+                time.sleep(cooldown)
+
+        print("\n[FULL RUN COMPLETE] Sleeping 24h before next run...")
+        time.sleep(60 * 60 * 24)
 
 
 if __name__ == "__main__":

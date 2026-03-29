@@ -19,7 +19,7 @@ WAIT_MIN = 0.05
 WAIT_MAX = 0.25
 
 
-def process_app(app_id, category):
+def process_app(app_id, category_desc):
 
     try:
         app_info = app(app_id)
@@ -35,7 +35,7 @@ def process_app(app_id, category):
             store=STORE,
             app_id=app_id,
             app_name=app_info.get("title"),
-            category=category
+            category=category_desc
         )
 
         version = app_info.get("version")
@@ -57,31 +57,34 @@ def crawl_google_play():
     with open("google-play-apps-categories.json", "r") as f:
         categories_data = json.load(f)
 
-    for cat_entry in categories_data:
+    while True:
 
-        category_id = cat_entry["category"]
-        category_desc = cat_entry.get("category_description", category_id)
+        for cat_entry in categories_data:
 
-        print(f"\n=== Scraping {category_id} ({category_desc}) ===")
+            category_id   = cat_entry["category"]
+            category_desc = cat_entry.get("category_description", category_id)
 
-        try:
-            results = search(category_id, n_hits=MAX_APPS_PER_CATEGORY)
-        except Exception as e:
-            print(f"[ERROR] search failed: {e}")
-            continue
+            print(f"\n=== Scraping {category_id} ({category_desc}) ===")
 
-        app_ids = [r["appId"] for r in results]
+            try:
+                results = search(category_id, n_hits=MAX_APPS_PER_CATEGORY)
+            except Exception as e:
+                print(f"[ERROR] search failed: {e}")
+                continue
 
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            app_ids = [r["appId"] for r in results]
 
-            futures = [
-                executor.submit(process_app, app_id, category_id)
-                for app_id in app_ids
-            ]
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
 
-            for idx, future in enumerate(as_completed(futures), 1):
+                futures = [
+                    executor.submit(process_app, app_id, category_desc)
+                    for app_id in app_ids
+                ]
 
-                title = future.result()
+                for idx, future in enumerate(as_completed(futures), 1):
+                    title = future.result()
+                    if title:
+                        print(f"[{category_desc}] {idx}/{len(app_ids)} → {title}")
 
-                if title:
-                    print(f"[{category_id}] {idx}/{len(app_ids)} → {title}")
+        print("\n[FULL RUN COMPLETE] Sleeping 24h before next run...")
+        time.sleep(60 * 60 * 24)
