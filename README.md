@@ -21,7 +21,7 @@ python3 main.py
 ## To check-in the db
 psql -h localhost -p 5433 -U crawler -d appcrawler -f report.sql
 ## To plot graph
-python3 ./tools/visualize.py
+python3 visualize.py
 (passwrd: crawlerpass)
 ```
 [^1]: https://github.com/JoMingyu/google-play-scraper
