@@ -193,8 +193,6 @@ def crawl_app_store():
                 print(f"[COOLDOWN] {cooldown:.1f}s...")
                 time.sleep(cooldown)
 
-        print("\n[FULL RUN COMPLETE] Sleeping 24h before next run...")
-        time.sleep(60 * 60 * 24)
 
 
 if __name__ == "__main__":

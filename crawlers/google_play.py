@@ -85,6 +85,3 @@ def crawl_google_play():
                     title = future.result()
                     if title:
                         print(f"[{category_desc}] {idx}/{len(app_ids)} → {title}")
-
-        print("\n[FULL RUN COMPLETE] Sleeping 24h before next run...")
-        time.sleep(60 * 60 * 24)
