@@ -31,8 +31,11 @@ HEADERS = {
 
 COLLECTIONS = [
     "topfreeapplications",
+    "toppaidapplications",
     "topgrossingapplications",
     "newapplications",
+    "newfreeapplications",
+    "newpaidapplications",
 ]
 
 KEYWORDS = [
