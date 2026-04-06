@@ -35,9 +35,29 @@ COLLECTIONS = [
     "newapplications",
 ]
 
+KEYWORDS = [
+    "photo", "video", "music", "game", "fitness", "finance",
+    "travel", "food", "shopping", "social", "news", "weather",
+    "productivity", "education", "health", "kids", "sports",
+    "utilities", "book", "lifestyle",
+]
 # ──────────────────────────────────────────────
 # iTunes API helpers
 # ──────────────────────────────────────────────
+def _search_by_keyword(keyword: str, country: str, limit: int = 200) -> list[str]:
+    """Supplement RSS feeds with keyword search results."""
+    try:
+        url = (
+            f"https://itunes.apple.com/search"
+            f"?term={keyword}&entity=software&country={country}&limit={limit}"
+        )
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+        return [str(r["trackId"]) for r in results if "trackId" in r]
+    except Exception as e:
+        print(f"[WARN] keyword search '{keyword}' failed: {e}")
+        return []
 
 def _search_category(category_id: str, country: str, limit: int = MAX_APPS_PER_CATEGORY) -> list[str]:
     """
@@ -192,6 +212,15 @@ def crawl_app_store():
                 cooldown = random.uniform(CATEGORY_WAIT_MIN, CATEGORY_WAIT_MAX)
                 print(f"[COOLDOWN] {cooldown:.1f}s...")
                 time.sleep(cooldown)
+
+            print(f"\n--- [{country}] Keyword sweep ---")
+            for kw in KEYWORDS:
+                kw_ids = _search_by_keyword(kw, country)
+                new_kw_ids = [aid for aid in kw_ids if aid not in seen_app_ids]
+                if new_kw_ids:
+                    count = process_category("keyword", kw, new_kw_ids, country)
+                    seen_app_ids.update(new_kw_ids)
+                time.sleep(random.uniform(0.5, 1.0))
 
 
 
