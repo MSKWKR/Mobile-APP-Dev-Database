@@ -23,19 +23,19 @@ def insert_developer(name, email=None, website=None):
 
     return dev_id
 
-def insert_app(developer_id, store, app_id, app_name, category):
+def insert_app(developer_id, store, app_id, app_name, category, country=None):
 
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
         INSERT INTO apps
-        (developer_id, store, app_id, app_name, category)
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (store, app_id)
+        (developer_id, store, app_id, app_name, category, country)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (store, app_id, country)
         DO UPDATE SET app_name = EXCLUDED.app_name
         RETURNING id
-    """, (developer_id, store, app_id, app_name, category))
+    """, (developer_id, store, app_id, app_name, category, country))
 
     app_id = cur.fetchone()[0]
 

@@ -1,5 +1,6 @@
 from db.connection import get_connection
 
+
 def create_tables():
 
     conn = get_connection()
@@ -26,8 +27,9 @@ def create_tables():
         app_id TEXT NOT NULL,
         app_name TEXT NOT NULL,
         category TEXT,
+        country TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(store, app_id)
+        UNIQUE(store, app_id, country)
     )
     """)
 
@@ -42,6 +44,5 @@ def create_tables():
     """)
 
     conn.commit()
-
     cur.close()
     conn.close()
