@@ -187,7 +187,7 @@ def _run_category_sweep(country: str, seen_app_ids: set[str]) -> None:
 
 
 def _run_keyword_sweep(country: str, seen_app_ids: set[str]) -> None:
-    search_terms = generate_search_terms(country)
+    search_terms = list(generate_search_terms(country))
     total = len(search_terms)
     print(f"\n--- [{country}] Keyword sweep ({total} terms) ---")
 
