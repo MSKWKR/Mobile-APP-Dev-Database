@@ -1,5 +1,9 @@
 import itertools
+import json
 import string
+
+with open("listings/languages.json", "r") as f:
+    ALL_LANGS: list[str] = json.load(f)
 
 # ──────────────────────────────────────────────
 # Character sets
@@ -19,6 +23,43 @@ COUNTRY_CHARSETS: dict[str, str] = {
     "ua": CYRILLIC,
     "kr": KOREAN,
 }
+
+# Map country codes to their primary language code (ISO 639-1).
+# Used by crawlers that support lang= in search (e.g. Google Play).
+# Countries not listed here default to "en".
+COUNTRY_LANGS: dict[str, str] = {
+    "jp": "ja",
+    "cn": "zh",
+    "kr": "ko",
+    "ru": "ru",
+    "ua": "uk",
+    "de": "de",
+    "fr": "fr",
+    "es": "es",
+    "it": "it",
+    "pt": "pt",
+    "br": "pt",
+    "nl": "nl",
+    "pl": "pl",
+    "se": "sv",
+    "no": "no",
+    "dk": "da",
+    "fi": "fi",
+    "tr": "tr",
+    "ar": "ar",
+    "sa": "ar",
+    "eg": "ar",
+    "th": "th",
+    "vn": "vi",
+    "id": "id",
+    "my": "ms",
+    "in": "hi",
+}
+
+
+def get_country_lang(country: str) -> str:
+    """Return the primary language code for a given country, defaulting to 'en'."""
+    return COUNTRY_LANGS.get(country.lower(), "en")
 
 # ──────────────────────────────────────────────
 # Curated verticals (Tier 3)
