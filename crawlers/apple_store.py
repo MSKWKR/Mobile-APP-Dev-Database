@@ -8,13 +8,14 @@ from db.queries import (
     insert_app,
     insert_app_version,
 )
+from crawlers.search_terms import generate_search_terms
 
 STORE = "app_store"
 MAX_APPS_PER_CATEGORY = 200
 BATCH_SIZE = 200
 
-# Major markets — covers ~90% of the global App Store catalog
-COUNTRIES = ["us", "gb", "cn", "jp", "kr", "de", "fr", "br", "in", "au", "tw"]          # iTunes lookup accepts up to 200 IDs per request
+with open("listings/countries.json", "r") as f:
+    COUNTRIES = json.load(f)
 
 WAIT_MIN = 0.5
 WAIT_MAX = 1.0
@@ -38,21 +39,21 @@ COLLECTIONS = [
     "newpaidapplications",
 ]
 
-KEYWORDS = [
-    "photo", "video", "music", "game", "fitness", "finance",
-    "travel", "food", "shopping", "social", "news", "weather",
-    "productivity", "education", "health", "kids", "sports",
-    "utilities", "book", "lifestyle",
-]
+
 # ──────────────────────────────────────────────
 # iTunes API helpers
 # ──────────────────────────────────────────────
+
 def _search_by_keyword(keyword: str, country: str, limit: int = 200) -> list[str]:
-    """Supplement RSS feeds with keyword search results."""
+    """
+    Search iTunes for apps matching keyword.
+    limit=200 is Apple's hard cap — kept explicit for clarity.
+    """
     try:
         url = (
             f"https://itunes.apple.com/search"
-            f"?term={keyword}&entity=software&country={country}&limit={limit}"
+            f"?term={requests.utils.quote(keyword)}"
+            f"&entity=software&country={country}&limit={limit}"
         )
         resp = requests.get(url, headers=HEADERS, timeout=15)
         resp.raise_for_status()
@@ -61,6 +62,7 @@ def _search_by_keyword(keyword: str, country: str, limit: int = 200) -> list[str
     except Exception as e:
         print(f"[WARN] keyword search '{keyword}' failed: {e}")
         return []
+
 
 def _search_category(category_id: str, country: str, limit: int = MAX_APPS_PER_CATEGORY) -> list[str]:
     """
@@ -155,6 +157,7 @@ def process_category(category_id: str, category_desc: str, app_ids: list[str], c
                     app_id=str(app_info.get("trackId")),
                     app_name=app_info.get("trackName"),
                     category=category_desc,
+                    country=country,
                 )
 
                 version = app_info.get("version")
@@ -167,10 +170,32 @@ def process_category(category_id: str, category_desc: str, app_ids: list[str], c
             except Exception as e:
                 print(f"[ERROR] insert failed for {app_info.get('trackId')}: {e}")
 
-        # Be polite between batches
         time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
 
     return inserted
+
+
+# ──────────────────────────────────────────────
+# Keyword sweep
+# ──────────────────────────────────────────────
+
+def _run_keyword_sweep(country: str, seen_app_ids: set[str]) -> None:
+    search_terms = generate_search_terms(country)
+    total = len(search_terms)
+    print(f"\n--- [{country}] Keyword sweep ({total} terms) ---")
+
+    for i, term in enumerate(search_terms):
+        kw_ids = _search_by_keyword(term, country)
+        new_ids = [aid for aid in kw_ids if aid not in seen_app_ids]
+
+        if new_ids:
+            count = process_category("keyword", term, new_ids, country)
+            seen_app_ids.update(new_ids)
+            print(f"  [{i+1}/{total}] '{term}' → {count} new")
+        else:
+            print(f"  [{i+1}/{total}] '{term}' → 0 new (all dupes)")
+
+        time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
 
 
 # ──────────────────────────────────────────────
@@ -178,11 +203,11 @@ def process_category(category_id: str, category_desc: str, app_ids: list[str], c
 # ──────────────────────────────────────────────
 
 def crawl_app_store():
-    with open("categories/apple-appstore-categories.json", "r") as f:
+    with open("listings/apple-appstore-categories.json", "r") as f:
         categories_data = json.load(f)
 
     while True:
-        seen_app_ids: set[str] = set()  # reset deduplication each full run
+        seen_app_ids: set[str] = set()
 
         for country in COUNTRIES:
             print(f"\n{'='*50}")
@@ -190,7 +215,6 @@ def crawl_app_store():
             print(f"{'='*50}")
 
             for cat_entry in categories_data:
-
                 category_id   = cat_entry["category"]
                 category_desc = cat_entry.get("category_description", category_id)
 
@@ -216,15 +240,7 @@ def crawl_app_store():
                 print(f"[COOLDOWN] {cooldown:.1f}s...")
                 time.sleep(cooldown)
 
-            print(f"\n--- [{country}] Keyword sweep ---")
-            for kw in KEYWORDS:
-                kw_ids = _search_by_keyword(kw, country)
-                new_kw_ids = [aid for aid in kw_ids if aid not in seen_app_ids]
-                if new_kw_ids:
-                    count = process_category("keyword", kw, new_kw_ids, country)
-                    seen_app_ids.update(new_kw_ids)
-                time.sleep(random.uniform(0.5, 1.0))
-
+            _run_keyword_sweep(country, seen_app_ids)
 
 
 if __name__ == "__main__":
