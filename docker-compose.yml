@@ -2,6 +2,7 @@ services:
 
   crawler-americas:
     build: .
+    container_name: crawler-americas
     environment:
       - COUNTRIES_FILE=listings/countries-americas.json
       - DB_HOST=db
@@ -16,6 +17,7 @@ services:
 
   crawler-europe:
     build: .
+    container_name: crawler-europe
     environment:
       - COUNTRIES_FILE=listings/countries-europe.json
       - DB_HOST=db
@@ -30,6 +32,7 @@ services:
 
   crawler-asia-pacific:
     build: .
+    container_name: crawler-asia_pacific
     environment:
       - COUNTRIES_FILE=listings/countries-asia_pacific.json
       - DB_HOST=db
@@ -44,6 +47,7 @@ services:
 
   crawler-africa-me:
     build: .
+    container_name: crawler-africa-middle_east
     environment:
       - COUNTRIES_FILE=listings/countries-africa_middle_east.json
       - DB_HOST=db
@@ -58,6 +62,7 @@ services:
 
   db:
     image: postgres:16
+    container_name: postgres_db
     environment:
       POSTGRES_DB: appcrawler
       POSTGRES_USER: crawler
