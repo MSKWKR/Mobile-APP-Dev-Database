@@ -1,16 +1,90 @@
-version: "3"
-
 services:
+
+  crawler-americas:
+    build: .
+    environment:
+      - COUNTRIES_FILE=listings/countries-americas.json
+      - DB_HOST=db
+      - DB_PORT=5432
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.11
+
+  crawler-europe:
+    build: .
+    environment:
+      - COUNTRIES_FILE=listings/countries-europe.json
+      - DB_HOST=db
+      - DB_PORT=5432
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.12
+
+  crawler-asia-pacific:
+    build: .
+    environment:
+      - COUNTRIES_FILE=listings/countries-asia_pacific.json
+      - DB_HOST=db
+      - DB_PORT=5432
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.13
+
+  crawler-africa-me:
+    build: .
+    environment:
+      - COUNTRIES_FILE=listings/countries-africa_middle_east.json
+      - DB_HOST=db
+      - DB_PORT=5432
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.14
+
   db:
     image: postgres:16
     environment:
+      POSTGRES_DB: appcrawler
       POSTGRES_USER: crawler
       POSTGRES_PASSWORD: crawlerpass
-      POSTGRES_DB: appcrawler
     ports:
       - "5433:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.10
+    command: >
+      postgres
+        -c max_connections=200
+        -c shared_buffers=512MB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crawler -d appcrawler"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+networks:
+  crawler_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
 
 volumes:
-  postgres_data:
+  pgdata:

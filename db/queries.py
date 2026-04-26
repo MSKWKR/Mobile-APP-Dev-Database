@@ -11,7 +11,8 @@ def insert_developer(name, email=None, website=None):
         VALUES (%s, %s, %s)
         ON CONFLICT (name)
         DO UPDATE SET
-            email = COALESCE(EXCLUDED.email, developers.email)
+            email   = COALESCE(EXCLUDED.email, developers.email),
+            website = COALESCE(EXCLUDED.website, developers.website)
         RETURNING id
     """, (name, email, website))
 
@@ -23,6 +24,7 @@ def insert_developer(name, email=None, website=None):
 
     return dev_id
 
+
 def insert_app(developer_id, store, app_id, app_name, category, country=None):
 
     conn = get_connection()
@@ -30,20 +32,24 @@ def insert_app(developer_id, store, app_id, app_name, category, country=None):
 
     cur.execute("""
         INSERT INTO apps
-        (developer_id, store, app_id, app_name, category, country)
+            (developer_id, store, app_id, app_name, category, country)
         VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT (store, app_id, country)
-        DO UPDATE SET app_name = EXCLUDED.app_name
+        ON CONFLICT (store, app_id)
+        DO UPDATE SET
+            app_name  = EXCLUDED.app_name,
+            category  = EXCLUDED.category,
+            country   = EXCLUDED.country
         RETURNING id
     """, (developer_id, store, app_id, app_name, category, country))
 
-    app_id = cur.fetchone()[0]
+    row = cur.fetchone()[0]
 
     conn.commit()
     cur.close()
     conn.close()
 
-    return app_id
+    return row
+
 
 def insert_app_version(app_db_id, version):
 

@@ -1,12 +1,13 @@
+import os
 import psycopg2
-from config import DB_CONFIG
+
+DB_CONFIG = {
+    "host":     os.environ.get("DB_HOST", "localhost"),
+    "port":     int(os.environ.get("DB_PORT", 5433)),
+    "database": os.environ.get("DB_NAME", "appcrawler"),
+    "user":     os.environ.get("DB_USER", "crawler"),
+    "password": os.environ.get("DB_PASS", "crawlerpass"),
+}
 
 def get_connection():
-    conn = psycopg2.connect(
-        host=DB_CONFIG["host"],
-        port=DB_CONFIG["port"],
-        database=DB_CONFIG["database"],
-        user=DB_CONFIG["user"],
-        password=DB_CONFIG["password"]
-    )
-    return conn
+    return psycopg2.connect(**DB_CONFIG)

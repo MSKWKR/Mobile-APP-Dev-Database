@@ -1,7 +1,11 @@
 import json
+import os
 import random
 import requests
+import threading
 import time
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from db.queries import insert_developer, insert_app, insert_app_version
 from crawlers.search_terms import generate_search_terms
@@ -10,14 +14,21 @@ STORE = "app_store"
 MAX_APPS_PER_CATEGORY = 200
 BATCH_SIZE = 200
 
-with open("listings/countries.json", "r") as f:
-    COUNTRIES = json.load(f)
-
-# Match the original script's wait times
 WAIT_MIN = 0.2
 WAIT_MAX = 0.4
 CATEGORY_WAIT_MIN = 0.5
 CATEGORY_WAIT_MAX = 1.0
+
+_countries_file = os.environ.get("COUNTRIES_FILE", "listings/countries.json")
+with open(_countries_file, "r") as f:
+    COUNTRIES: list[str] = json.load(f)
+
+with open("listings/apple-appstore-categories.json", "r") as f:
+    CATEGORIES_DATA: list[dict] = json.load(f)
+
+print(f"[CONTAINER] Loaded {len(COUNTRIES)} countries from {_countries_file}")
+
+COUNTRY_WORKERS = min(len(COUNTRIES), 8)
 
 HEADERS = {
     "User-Agent": (
@@ -36,36 +47,49 @@ COLLECTIONS = [
     "newpaidapplications",
 ]
 
+_rate_lock = threading.Lock()
+_min_interval = 6.0
+_last_request_time = 0.0
+
+_seen_lock = threading.Lock()
+_seen_app_ids: set[str] = set()
+
+
+# ──────────────────────────────────────────────
+# Rate-limited request
+# ──────────────────────────────────────────────
+
+def _rate_limited_get(url: str, **kwargs) -> requests.Response:
+    global _last_request_time
+    with _rate_lock:
+        now = time.time()
+        wait = _min_interval - (now - _last_request_time)
+        if wait > 0:
+            time.sleep(wait)
+        _last_request_time = time.time()
+    return requests.get(url, **kwargs)
+
 
 # ──────────────────────────────────────────────
 # iTunes API helpers
 # ──────────────────────────────────────────────
 
 def _search_by_keyword(keyword: str, country: str, limit: int = 200) -> list[dict]:
-    """
-    Search iTunes — returns full result dicts directly.
-    No follow-up lookup needed; search results include all fields we store.
-    limit=200 is Apple's hard cap.
-    """
     try:
         url = (
             f"https://itunes.apple.com/search"
             f"?term={requests.utils.quote(keyword)}"
             f"&entity=software&country={country}&limit={limit}"
         )
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp = _rate_limited_get(url, headers=HEADERS, timeout=15)
         resp.raise_for_status()
         return resp.json().get("results", [])
     except Exception as e:
-        print(f"[WARN] keyword search '{keyword}' failed: {e}")
+        print(f"[WARN] keyword '{keyword}' [{country}] failed: {e}")
         return []
 
 
 def _search_category(category_id: str, country: str, limit: int = MAX_APPS_PER_CATEGORY) -> list[str]:
-    """
-    Fetch app IDs from iTunes RSS feeds for a category.
-    RSS feeds return IDs only so _fetch_batch is still needed for this pass.
-    """
     capped = min(limit, 200)
     seen: set[str] = set()
     app_ids: list[str] = []
@@ -76,7 +100,7 @@ def _search_category(category_id: str, country: str, limit: int = MAX_APPS_PER_C
             f"/limit={capped}/genre={category_id}/json"
         )
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=15)
+            resp = _rate_limited_get(url, headers=HEADERS, timeout=15)
             resp.raise_for_status()
             entries = resp.json().get("feed", {}).get("entry", [])
             for entry in entries:
@@ -88,28 +112,24 @@ def _search_category(category_id: str, country: str, limit: int = MAX_APPS_PER_C
                 except (KeyError, TypeError):
                     continue
         except Exception as e:
-            print(f"[WARN] collection {collection} failed for {category_id}/{country}: {e}")
+            print(f"[WARN] {collection} failed for {category_id}/{country}: {e}")
             continue
 
     return app_ids
 
 
 def _fetch_batch(app_ids: list[str], country: str, retries: int = 3) -> list[dict]:
-    """
-    Fetch full metadata for up to 200 apps via iTunes Lookup.
-    Only called for the category RSS pass — keyword pass inserts from search results directly.
-    """
     for attempt in range(retries):
         try:
             url = f"https://itunes.apple.com/lookup?id={','.join(app_ids)}&country={country}"
-            resp = requests.get(url, headers=HEADERS, timeout=30)
+            resp = _rate_limited_get(url, headers=HEADERS, timeout=30)
             resp.raise_for_status()
             return resp.json().get("results", [])
         except requests.HTTPError as e:
             status = e.response.status_code if e.response else None
             if status in (403, 429) and attempt < retries - 1:
                 wait = (5 ** attempt) + random.uniform(0, 2)
-                print(f"[RATE LIMIT] batch → {status}, retrying in {wait:.1f}s...")
+                print(f"[RATE LIMIT] [{country}] {status}, retrying in {wait:.1f}s...")
                 time.sleep(wait)
             else:
                 raise
@@ -120,15 +140,12 @@ def _fetch_batch(app_ids: list[str], country: str, retries: int = 3) -> list[dic
 # DB insert
 # ──────────────────────────────────────────────
 
-def _insert_app_info(app_info: dict, category_desc: str, country: str) -> bool:
-    """
-    Insert a single app from an iTunes result dict.
-    Handles both search results and lookup results — field names are identical.
-    """
+def _insert_app_info(app_info: dict, country: str) -> bool:
     try:
+        category = app_info.get("primaryGenreName") or "Unknown"
         dev_id = insert_developer(
             name=app_info.get("artistName") or app_info.get("sellerName"),
-            email=None,  # Apple never exposes developer email publicly
+            email=None,
             website=app_info.get("sellerUrl"),
         )
         app_db_id = insert_app(
@@ -136,7 +153,7 @@ def _insert_app_info(app_info: dict, category_desc: str, country: str) -> bool:
             store=STORE,
             app_id=str(app_info.get("trackId")),
             app_name=app_info.get("trackName"),
-            category=category_desc,
+            category=category,
             country=country,
         )
         version = app_info.get("version")
@@ -144,101 +161,81 @@ def _insert_app_info(app_info: dict, category_desc: str, country: str) -> bool:
             insert_app_version(app_db_id, version)
         return True
     except Exception as e:
-        print(f"[ERROR] insert failed for {app_info.get('trackId')}: {e}")
+        print(f"[ERROR] insert {app_info.get('trackId')}: {e}")
         return False
 
 
 # ──────────────────────────────────────────────
-# Category pass — RSS → batch lookup
+# Per-country worker
 # ──────────────────────────────────────────────
 
-def _process_category(category_id: str, category_desc: str, app_ids: list[str], country: str) -> int:
-    inserted = 0
-    for i in range(0, len(app_ids), BATCH_SIZE):
-        chunk = app_ids[i: i + BATCH_SIZE]
+def _crawl_country(country: str) -> None:
+    print(f"[{country.upper()}] starting")
+
+    for cat_entry in CATEGORIES_DATA:
+        category_id   = cat_entry["category"]
+        category_desc = cat_entry.get("category_description", category_id)
+
         try:
-            apps = _fetch_batch(chunk, country)
+            app_ids = _search_category(category_id, country)
         except Exception as e:
-            print(f"[ERROR] batch fetch failed: {e}")
+            print(f"[ERROR] [{country}] {category_id}: {e}")
             continue
 
-        for app_info in apps:
-            if _insert_app_info(app_info, category_desc, country):
-                inserted += 1
-                print(f"[{category_id}] {inserted}/{len(app_ids)} → {app_info.get('trackName')}")
+        with _seen_lock:
+            new_ids = [aid for aid in app_ids if aid not in _seen_app_ids]
+            _seen_app_ids.update(new_ids)
 
-        time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
-
-    return inserted
-
-
-# ──────────────────────────────────────────────
-# Keyword sweep — inserts directly from search results, no _fetch_batch
-# ──────────────────────────────────────────────
-
-def _run_keyword_sweep(country: str, seen_app_ids: set[str]) -> None:
-    search_terms = list(generate_search_terms(country))
-    total = len(search_terms)
-    print(f"\n--- [{country}] Keyword sweep ({total} terms) ---")
-
-    for i, term in enumerate(search_terms):
-        results = _search_by_keyword(term, country)
-        new_results = [r for r in results if str(r.get("trackId")) not in seen_app_ids]
+        if not new_ids:
+            continue
 
         inserted = 0
-        for app_info in new_results:
-            if _insert_app_info(app_info, term, country):
-                inserted += 1
-                seen_app_ids.add(str(app_info.get("trackId")))
+        for i in range(0, len(new_ids), BATCH_SIZE):
+            chunk = new_ids[i: i + BATCH_SIZE]
+            try:
+                apps = _fetch_batch(chunk, country)
+            except Exception as e:
+                print(f"[ERROR] [{country}] batch: {e}")
+                continue
+            for app_info in apps:
+                if _insert_app_info(app_info, country):
+                    inserted += 1
 
+        print(f"[{country}/{category_desc}] {inserted} inserted")
+        time.sleep(random.uniform(CATEGORY_WAIT_MIN, CATEGORY_WAIT_MAX))
+
+    print(f"[{country}] keyword sweep starting")
+    for term in generate_search_terms(country):
+        results = _search_by_keyword(term, country)
+
+        with _seen_lock:
+            new_results = [r for r in results if str(r.get("trackId")) not in _seen_app_ids]
+            for r in new_results:
+                _seen_app_ids.add(str(r.get("trackId")))
+
+        inserted = sum(_insert_app_info(r, country) for r in new_results)
         if inserted:
-            print(f"  [{i+1}/{total}] '{term}' → {inserted} new")
-        else:
-            print(f"  [{i+1}/{total}] '{term}' → 0 new (all dupes)")
+            print(f"  [{country}] '{term}' → {inserted} new")
 
-        time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
+    print(f"[{country.upper()}] DONE")
 
 
 # ──────────────────────────────────────────────
-# Main crawler
+# Main
 # ──────────────────────────────────────────────
 
-def crawl_app_store():
-    with open("listings/apple-appstore-categories.json", "r") as f:
-        categories_data = json.load(f)
-
+def crawl_app_store() -> None:
     while True:
-        seen_app_ids: set[str] = set()
-
-        for country in COUNTRIES:
-            print(f"\n{'='*50}")
-            print(f"  Country: {country.upper()}")
-            print(f"{'='*50}")
-
-            for cat_entry in categories_data:
-                category_id   = cat_entry["category"]
-                category_desc = cat_entry.get("category_description", category_id)
-
-                print(f"\n=== [{country}] {category_id} ({category_desc}) ===")
-
+        print(f"[RUN START] {len(COUNTRIES)} countries, {COUNTRY_WORKERS} workers")
+        with ThreadPoolExecutor(max_workers=COUNTRY_WORKERS) as executor:
+            futures = {executor.submit(_crawl_country, c): c for c in COUNTRIES}
+            for future in as_completed(futures):
+                country = futures[future]
                 try:
-                    app_ids = _search_category(category_id, country)
+                    future.result()
                 except Exception as e:
-                    print(f"[ERROR] search failed: {e}")
-                    continue
-
-                new_ids = [aid for aid in app_ids if aid not in seen_app_ids]
-                if not new_ids:
-                    print("[SKIP] all apps already seen")
-                    continue
-
-                count = _process_category(category_id, category_desc, new_ids, country)
-                seen_app_ids.update(new_ids)
-                print(f"[{country}/{category_id}] done — {count} inserted ({len(app_ids) - len(new_ids)} dupes skipped)")
-
-                time.sleep(random.uniform(CATEGORY_WAIT_MIN, CATEGORY_WAIT_MAX))
-
-            _run_keyword_sweep(country, seen_app_ids)
+                    print(f"[ERROR] {country} crashed: {e}")
+        print("[RUN COMPLETE] restarting...")
 
 
 if __name__ == "__main__":
