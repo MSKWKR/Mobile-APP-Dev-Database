@@ -1,4 +1,5 @@
 import json
+import os
 import random
 import time
 
@@ -14,9 +15,8 @@ from crawlers.search_terms import generate_search_terms, get_country_lang, ALL_L
 
 STORE = "google_play"
 MAX_WORKERS = 8
-N_HITS = 30  # Google Play's hard cap per search
+N_HITS = 30
 
-# Match the original script's wait times
 WAIT_MIN = 0.05
 WAIT_MAX = 0.25
 CATEGORY_WAIT_MIN = 0.5
@@ -26,26 +26,16 @@ KEYWORD_WAIT_MAX = 0.4
 LANG_WAIT_MIN = 0.2
 LANG_WAIT_MAX = 0.4
 
-with open("listings/countries.json", "r") as f:
-    _all_countries = json.load(f)
+_countries_file = os.environ.get("COUNTRIES_FILE", "listings/countries.json")
+with open(_countries_file, "r") as f:
+    COUNTRIES: list[str] = json.load(f)
 
 with open("listings/google-play-apps-categories.json", "r") as f:
     _categories_data = json.load(f)
 
-GPLAY_SUPPORTED_COUNTRIES = {
-    "ae", "ar", "at", "au", "az", "be", "bg", "bh", "bo", "br",
-    "by", "ca", "ch", "cl", "co", "cr", "cz", "de", "dk", "do",
-    "dz", "ec", "eg", "es", "et", "fi", "fr", "gb", "ge", "gh",
-    "gr", "gt", "hk", "hn", "hr", "hu", "id", "ie", "il", "in",
-    "iq", "it", "jm", "jo", "jp", "ke", "kw", "kz", "lb", "lk",
-    "lt", "lv", "ma", "mk", "mx", "my", "ng", "ni", "nl", "no",
-    "nz", "om", "pa", "pe", "pg", "ph", "pk", "pl", "pr", "pt",
-    "py", "qa", "ro", "rs", "ru", "sa", "se", "sg", "si", "sk",
-    "sv", "th", "tn", "tr", "tw", "tz", "ua", "ug", "us", "uy",
-    "uz", "ve", "vn", "ye", "za", "zw",
-}
+print(f"[CONTAINER] Loaded {len(COUNTRIES)} countries from {_countries_file}")
 
-COUNTRIES = [c for c in _all_countries if c.lower() in GPLAY_SUPPORTED_COUNTRIES]
+COUNTRY_WORKERS = min(len(COUNTRIES), 3)
 
 CATEGORY_PAIRS: list[tuple[str, str]] = [
     (c["category"], c.get("category_description", c["category"]))
@@ -58,7 +48,6 @@ CATEGORY_PAIRS: list[tuple[str, str]] = [
 # ──────────────────────────────────────────────
 
 def _search_by_term(term: str, country: str, lang: str = "en") -> list[dict]:
-    """Search Google Play, return full result dicts (appId, title, developer, genre)."""
     retries = 3
     for attempt in range(retries):
         try:
@@ -75,14 +64,10 @@ def _search_by_term(term: str, country: str, lang: str = "en") -> list[dict]:
 
 
 # ──────────────────────────────────────────────
-# App detail fetch — called in parallel to get developerEmail
+# App detail fetch
 # ──────────────────────────────────────────────
 
 def _fetch_app_details(app_id: str, country: str, retries: int = 3) -> dict | None:
-    """
-    Fetch full app details including developerEmail and developerWebsite.
-    Run in parallel via ThreadPoolExecutor to match original script's throughput.
-    """
     for attempt in range(retries):
         try:
             return gplay_app(app_id, lang="en", country=country)
@@ -102,7 +87,6 @@ def _fetch_app_details(app_id: str, country: str, retries: int = 3) -> dict | No
 # ──────────────────────────────────────────────
 
 def _insert_app_info(app_info: dict, category_desc: str, country: str) -> str | None:
-    """Insert a single app from a gplay_app() result dict. Returns title on success."""
     try:
         dev_id = insert_developer(
             name=app_info.get("developer"),
@@ -127,10 +111,6 @@ def _insert_app_info(app_info: dict, category_desc: str, country: str) -> str | 
 
 
 def _bulk_fetch_and_insert(app_ids: list[str], category_desc: str, country: str) -> int:
-    """
-    Fetch full app details in parallel then insert.
-    Parallelism here is what made the original script fast despite calling app() per result.
-    """
     inserted = 0
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
@@ -231,21 +211,36 @@ def _run_language_sweep(country: str, seen_app_ids: set[str]) -> None:
 
 
 # ──────────────────────────────────────────────
+# Per-country worker
+# ──────────────────────────────────────────────
+
+def _crawl_country(country: str) -> None:
+    print(f"[{country.upper()}] starting")
+    seen_app_ids: set[str] = set()
+
+    _run_category_sweep(country, seen_app_ids)
+    _run_keyword_sweep(country, seen_app_ids)
+    _run_language_sweep(country, seen_app_ids)
+
+    print(f"[{country.upper()}] DONE")
+
+
+# ──────────────────────────────────────────────
 # Main crawler
 # ──────────────────────────────────────────────
 
-def crawl_google_play():
+def crawl_google_play() -> None:
     while True:
-        seen_app_ids: set[str] = set()
-
-        for country in COUNTRIES:
-            print(f"\n{'='*55}")
-            print(f"  Country: {country.upper()}")
-            print(f"{'='*55}")
-
-            _run_category_sweep(country, seen_app_ids)
-            _run_keyword_sweep(country, seen_app_ids)
-            _run_language_sweep(country, seen_app_ids)
+        print(f"[RUN START] {len(COUNTRIES)} countries, {COUNTRY_WORKERS} workers")
+        with ThreadPoolExecutor(max_workers=COUNTRY_WORKERS) as executor:
+            futures = {executor.submit(_crawl_country, c): c for c in COUNTRIES}
+            for future in as_completed(futures):
+                country = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"[ERROR] {country} crashed: {e}")
+        print("[RUN COMPLETE] restarting...")
 
 
 if __name__ == "__main__":

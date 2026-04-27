@@ -14,10 +14,10 @@ STORE = "app_store"
 MAX_APPS_PER_CATEGORY = 200
 BATCH_SIZE = 200
 
-WAIT_MIN = 0.2
-WAIT_MAX = 0.4
-CATEGORY_WAIT_MIN = 0.5
-CATEGORY_WAIT_MAX = 1.0
+WAIT_MIN = 1.0
+WAIT_MAX = 2.0
+CATEGORY_WAIT_MIN = 2.0
+CATEGORY_WAIT_MAX = 4.0
 
 _countries_file = os.environ.get("COUNTRIES_FILE", "listings/countries.json")
 with open(_countries_file, "r") as f:
@@ -28,7 +28,7 @@ with open("listings/apple-appstore-categories.json", "r") as f:
 
 print(f"[CONTAINER] Loaded {len(COUNTRIES)} countries from {_countries_file}")
 
-COUNTRY_WORKERS = min(len(COUNTRIES), 8)
+COUNTRY_WORKERS = min(len(COUNTRIES), 3)
 
 HEADERS = {
     "User-Agent": (
@@ -47,27 +47,9 @@ COLLECTIONS = [
     "newpaidapplications",
 ]
 
-_rate_lock = threading.Lock()
-_min_interval = 6.0
-_last_request_time = 0.0
 
 _seen_lock = threading.Lock()
 _seen_app_ids: set[str] = set()
-
-
-# ──────────────────────────────────────────────
-# Rate-limited request
-# ──────────────────────────────────────────────
-
-def _rate_limited_get(url: str, **kwargs) -> requests.Response:
-    global _last_request_time
-    with _rate_lock:
-        now = time.time()
-        wait = _min_interval - (now - _last_request_time)
-        if wait > 0:
-            time.sleep(wait)
-        _last_request_time = time.time()
-    return requests.get(url, **kwargs)
 
 
 # ──────────────────────────────────────────────
@@ -75,13 +57,14 @@ def _rate_limited_get(url: str, **kwargs) -> requests.Response:
 # ──────────────────────────────────────────────
 
 def _search_by_keyword(keyword: str, country: str, limit: int = 200) -> list[dict]:
+    time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
     try:
         url = (
             f"https://itunes.apple.com/search"
             f"?term={requests.utils.quote(keyword)}"
             f"&entity=software&country={country}&limit={limit}"
         )
-        resp = _rate_limited_get(url, headers=HEADERS, timeout=15)
+        resp = requests.get(url, headers=HEADERS, timeout=10)
         resp.raise_for_status()
         return resp.json().get("results", [])
     except Exception as e:
@@ -100,7 +83,8 @@ def _search_category(category_id: str, country: str, limit: int = MAX_APPS_PER_C
             f"/limit={capped}/genre={category_id}/json"
         )
         try:
-            resp = _rate_limited_get(url, headers=HEADERS, timeout=15)
+            time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
+            resp = requests.get(url, headers=HEADERS, timeout=10)
             resp.raise_for_status()
             entries = resp.json().get("feed", {}).get("entry", [])
             for entry in entries:
@@ -122,7 +106,7 @@ def _fetch_batch(app_ids: list[str], country: str, retries: int = 3) -> list[dic
     for attempt in range(retries):
         try:
             url = f"https://itunes.apple.com/lookup?id={','.join(app_ids)}&country={country}"
-            resp = _rate_limited_get(url, headers=HEADERS, timeout=30)
+            resp = requests.get(url, headers=HEADERS, timeout=20)
             resp.raise_for_status()
             return resp.json().get("results", [])
         except requests.HTTPError as e:

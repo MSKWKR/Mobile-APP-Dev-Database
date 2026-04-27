@@ -1,10 +1,15 @@
 services:
 
-  crawler-americas:
+  # ──────────────────────────────────────────────
+  # App Store crawlers
+  # ──────────────────────────────────────────────
+
+  crawler-appstore-americas:
     build: .
-    container_name: crawler-americas
+    container_name: crawler-appstore-americas
     environment:
       - COUNTRIES_FILE=listings/countries-americas.json
+      - CRAWLER=app_store
       - DB_HOST=db
       - DB_PORT=5432
     depends_on:
@@ -15,11 +20,12 @@ services:
       crawler_net:
         ipv4_address: 172.28.0.11
 
-  crawler-europe:
+  crawler-appstore-europe:
     build: .
-    container_name: crawler-europe
+    container_name: crawler-appstore-europe
     environment:
       - COUNTRIES_FILE=listings/countries-europe.json
+      - CRAWLER=app_store
       - DB_HOST=db
       - DB_PORT=5432
     depends_on:
@@ -30,11 +36,12 @@ services:
       crawler_net:
         ipv4_address: 172.28.0.12
 
-  crawler-asia-pacific:
+  crawler-appstore-asia-pacific:
     build: .
-    container_name: crawler-asia_pacific
+    container_name: crawler-appstore-asia_pacific
     environment:
       - COUNTRIES_FILE=listings/countries-asia_pacific.json
+      - CRAWLER=app_store
       - DB_HOST=db
       - DB_PORT=5432
     depends_on:
@@ -45,11 +52,12 @@ services:
       crawler_net:
         ipv4_address: 172.28.0.13
 
-  crawler-africa-me:
+  crawler-appstore-africa-me:
     build: .
-    container_name: crawler-africa-middle_east
+    container_name: crawler-appstore-africa-middle_east
     environment:
       - COUNTRIES_FILE=listings/countries-africa_middle_east.json
+      - CRAWLER=app_store
       - DB_HOST=db
       - DB_PORT=5432
     depends_on:
@@ -59,6 +67,78 @@ services:
     networks:
       crawler_net:
         ipv4_address: 172.28.0.14
+
+  # ──────────────────────────────────────────────
+  # Google Play crawlers
+  # ──────────────────────────────────────────────
+
+  crawler-gplay-americas:
+    build: .
+    container_name: crawler-gplay-americas
+    environment:
+      - COUNTRIES_FILE=listings/countries-americas.json
+      - CRAWLER=google_play
+      - DB_HOST=db
+      - DB_PORT=5432
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.21
+
+  crawler-gplay-europe:
+    build: .
+    container_name: crawler-gplay-europe
+    environment:
+      - COUNTRIES_FILE=listings/countries-europe.json
+      - CRAWLER=google_play
+      - DB_HOST=db
+      - DB_PORT=5432
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.22
+
+  crawler-gplay-asia-pacific:
+    build: .
+    container_name: crawler-gplay-asia_pacific
+    environment:
+      - COUNTRIES_FILE=listings/countries-asia_pacific.json
+      - CRAWLER=google_play
+      - DB_HOST=db
+      - DB_PORT=5432
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.23
+
+  crawler-gplay-africa-me:
+    build: .
+    container_name: crawler-gplay-africa-middle_east
+    environment:
+      - COUNTRIES_FILE=listings/countries-africa_middle_east.json
+      - CRAWLER=google_play
+      - DB_HOST=db
+      - DB_PORT=5432
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.24
+
+  # ──────────────────────────────────────────────
+  # Database
+  # ──────────────────────────────────────────────
 
   db:
     image: postgres:16
