@@ -7,4 +7,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["sh", "-c", "sleep 5 && python -u main.py"]
+CMD ["sh", "-c", "sleep 15 && python -u main.py"]
