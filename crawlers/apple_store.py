@@ -14,10 +14,13 @@ STORE = "app_store"
 MAX_APPS_PER_CATEGORY = 200
 BATCH_SIZE = 200
 
-WAIT_MIN = 1.0
-WAIT_MAX = 2.0
-CATEGORY_WAIT_MIN = 2.0
-CATEGORY_WAIT_MAX = 4.0
+# 4 containers × 2 workers = 8 threads total
+# 3-5s sleep per request = ~1.5 req/s globally — safe for Apple
+WAIT_MIN = 3.0
+WAIT_MAX = 5.0
+CATEGORY_WAIT_MIN = 5.0
+CATEGORY_WAIT_MAX = 8.0
+COUNTRY_WORKERS = 2
 
 _countries_file = os.environ.get("COUNTRIES_FILE", "listings/countries.json")
 with open(_countries_file, "r") as f:
@@ -27,8 +30,6 @@ with open("listings/apple-appstore-categories.json", "r") as f:
     CATEGORIES_DATA: list[dict] = json.load(f)
 
 print(f"[CONTAINER] Loaded {len(COUNTRIES)} countries from {_countries_file}")
-
-COUNTRY_WORKERS = min(len(COUNTRIES), 3)
 
 HEADERS = {
     "User-Agent": (
@@ -46,7 +47,6 @@ COLLECTIONS = [
     "newfreeapplications",
     "newpaidapplications",
 ]
-
 
 _seen_lock = threading.Lock()
 _seen_app_ids: set[str] = set()
@@ -105,6 +105,7 @@ def _search_category(category_id: str, country: str, limit: int = MAX_APPS_PER_C
 def _fetch_batch(app_ids: list[str], country: str, retries: int = 3) -> list[dict]:
     for attempt in range(retries):
         try:
+            time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
             url = f"https://itunes.apple.com/lookup?id={','.join(app_ids)}&country={country}"
             resp = requests.get(url, headers=HEADERS, timeout=20)
             resp.raise_for_status()
@@ -112,7 +113,7 @@ def _fetch_batch(app_ids: list[str], country: str, retries: int = 3) -> list[dic
         except requests.HTTPError as e:
             status = e.response.status_code if e.response else None
             if status in (403, 429) and attempt < retries - 1:
-                wait = (5 ** attempt) + random.uniform(0, 2)
+                wait = 30 + random.uniform(0, 10)  # flat 30-40s backoff on rate limit
                 print(f"[RATE LIMIT] [{country}] {status}, retrying in {wait:.1f}s...")
                 time.sleep(wait)
             else:
@@ -156,6 +157,7 @@ def _insert_app_info(app_info: dict, country: str) -> bool:
 def _crawl_country(country: str) -> None:
     print(f"[{country.upper()}] starting")
 
+    # Category RSS pass
     for cat_entry in CATEGORIES_DATA:
         category_id   = cat_entry["category"]
         category_desc = cat_entry.get("category_description", category_id)
@@ -188,6 +190,7 @@ def _crawl_country(country: str) -> None:
         print(f"[{country}/{category_desc}] {inserted} inserted")
         time.sleep(random.uniform(CATEGORY_WAIT_MIN, CATEGORY_WAIT_MAX))
 
+    # Keyword sweep
     print(f"[{country}] keyword sweep starting")
     for term in generate_search_terms(country):
         results = _search_by_keyword(term, country)

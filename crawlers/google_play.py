@@ -14,17 +14,18 @@ from crawlers.search_terms import generate_search_terms, get_country_lang, ALL_L
 # ──────────────────────────────────────────────
 
 STORE = "google_play"
-MAX_WORKERS = 8
-N_HITS = 30
+MAX_WORKERS = 4        # reduced from 8 — fewer parallel fetches = less rate limiting
 
-WAIT_MIN = 0.05
-WAIT_MAX = 0.25
-CATEGORY_WAIT_MIN = 0.5
-CATEGORY_WAIT_MAX = 1.0
-KEYWORD_WAIT_MIN = 0.2
-KEYWORD_WAIT_MAX = 0.4
-LANG_WAIT_MIN = 0.2
-LANG_WAIT_MAX = 0.4
+WAIT_MIN = 0.5
+WAIT_MAX = 1.0
+CATEGORY_WAIT_MIN = 1.0
+CATEGORY_WAIT_MAX = 2.0
+KEYWORD_WAIT_MIN = 0.5
+KEYWORD_WAIT_MAX = 1.0
+LANG_WAIT_MIN = 0.5
+LANG_WAIT_MAX = 1.0
+
+N_HITS = 30
 
 _countries_file = os.environ.get("COUNTRIES_FILE", "listings/countries.json")
 with open(_countries_file, "r") as f:
@@ -48,14 +49,16 @@ CATEGORY_PAIRS: list[tuple[str, str]] = [
 # ──────────────────────────────────────────────
 
 def _search_by_term(term: str, country: str, lang: str = "en") -> list[dict]:
-    retries = 3
+    retries = 5
     for attempt in range(retries):
         try:
+            time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
             return search(term, lang=lang, country=country, n_hits=N_HITS)
         except Exception as e:
             msg = str(e).lower()
-            if "429" in msg and attempt < retries - 1:
-                wait = (5 ** attempt) + random.uniform(0, 2)
+            if ("429" in msg or "too many" in msg) and attempt < retries - 1:
+                # Google eases off fast — short flat backoff is enough
+                wait = 10 + random.uniform(0, 5)
                 print(f"[RATE LIMIT] '{term}' lang={lang} ({country}) → retrying in {wait:.1f}s...")
                 time.sleep(wait)
             else:
@@ -67,14 +70,15 @@ def _search_by_term(term: str, country: str, lang: str = "en") -> list[dict]:
 # App detail fetch
 # ──────────────────────────────────────────────
 
-def _fetch_app_details(app_id: str, country: str, retries: int = 3) -> dict | None:
+def _fetch_app_details(app_id: str, country: str, retries: int = 5) -> dict | None:
     for attempt in range(retries):
         try:
+            time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
             return gplay_app(app_id, lang="en", country=country)
         except Exception as e:
             msg = str(e).lower()
             if ("429" in msg or "too many" in msg) and attempt < retries - 1:
-                wait = (5 ** attempt) + random.uniform(0, 2)
+                wait = 10 + random.uniform(0, 5)
                 print(f"[RATE LIMIT] {app_id} → retrying in {wait:.1f}s...")
                 time.sleep(wait)
             else:
@@ -194,7 +198,7 @@ def _run_keyword_sweep(country: str, seen_app_ids: set[str]) -> None:
 def _run_language_sweep(country: str, seen_app_ids: set[str]) -> None:
     total_langs = len(ALL_LANGS)
     total_terms = len(VERTICALS)
-    print(f"\n--- [{country}] Language sweep ({total_langs} langs × {total_terms} verticals) ---")
+    print(f"\n--- [{country}] Language sweep ({total_langs} langs x {total_terms} verticals) ---")
 
     for li, lang in enumerate(ALL_LANGS):
         for term in VERTICALS:
