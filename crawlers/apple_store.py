@@ -10,6 +10,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from db.queries import insert_developer, insert_app, insert_app_version
 from crawlers.search_terms import generate_search_terms
 
+# ──────────────────────────────────────────────
+# Proxy — each container routes through its own Tor exit node
+# giving Apple a different IP per container
+# ──────────────────────────────────────────────
+_proxy_host = os.environ.get("PROXY_HOST")
+_proxy_port = os.environ.get("PROXY_PORT", "8118")
+PROXIES = (
+    {
+        "http":  f"http://{_proxy_host}:{_proxy_port}",
+        "https": f"http://{_proxy_host}:{_proxy_port}",
+    }
+    if _proxy_host else None
+)
+
 STORE = "app_store"
 MAX_APPS_PER_CATEGORY = 200
 BATCH_SIZE = 200
@@ -64,7 +78,7 @@ def _search_by_keyword(keyword: str, country: str, limit: int = 200) -> list[dic
             f"?term={requests.utils.quote(keyword)}"
             f"&entity=software&country={country}&limit={limit}"
         )
-        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp = requests.get(url, headers=HEADERS, timeout=10, proxies=PROXIES)
         resp.raise_for_status()
         return resp.json().get("results", [])
     except Exception as e:
@@ -84,7 +98,7 @@ def _search_category(category_id: str, country: str, limit: int = MAX_APPS_PER_C
         )
         try:
             time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
-            resp = requests.get(url, headers=HEADERS, timeout=10)
+            resp = requests.get(url, headers=HEADERS, timeout=10, proxies=PROXIES)
             resp.raise_for_status()
             entries = resp.json().get("feed", {}).get("entry", [])
             for entry in entries:
@@ -107,7 +121,7 @@ def _fetch_batch(app_ids: list[str], country: str, retries: int = 3) -> list[dic
         try:
             time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
             url = f"https://itunes.apple.com/lookup?id={','.join(app_ids)}&country={country}"
-            resp = requests.get(url, headers=HEADERS, timeout=20)
+            resp = requests.get(url, headers=HEADERS, timeout=20, proxies=PROXIES)
             resp.raise_for_status()
             return resp.json().get("results", [])
         except requests.HTTPError as e:
