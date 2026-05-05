@@ -1,36 +1,68 @@
 services:
 
-  tor-americas:
+  # ── Tor proxies — App Store ──────────────────
+  tor-as-americas:
     image: dperson/torproxy
     restart: unless-stopped
     networks:
       crawler_net:
         ipv4_address: 172.28.0.21
 
-  tor-europe:
+  tor-as-europe:
     image: dperson/torproxy
     restart: unless-stopped
     networks:
       crawler_net:
         ipv4_address: 172.28.0.22
 
-  tor-asia-pacific:
+  tor-as-asia-pacific:
     image: dperson/torproxy
     restart: unless-stopped
     networks:
       crawler_net:
         ipv4_address: 172.28.0.23
 
-  tor-africa-me:
+  tor-as-africa-me:
     image: dperson/torproxy
     restart: unless-stopped
     networks:
       crawler_net:
         ipv4_address: 172.28.0.24
 
-  crawler-americas:
+  # ── Tor proxies — Google Play ────────────────
+  tor-gp-americas:
+    image: dperson/torproxy
+    restart: unless-stopped
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.25
+
+  tor-gp-europe:
+    image: dperson/torproxy
+    restart: unless-stopped
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.26
+
+  tor-gp-asia-pacific:
+    image: dperson/torproxy
+    restart: unless-stopped
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.27
+
+  tor-gp-africa-me:
+    image: dperson/torproxy
+    restart: unless-stopped
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.28
+
+  # ── App Store crawlers ───────────────────────
+  as-americas:
     build: .
     environment:
+      - CRAWLER_TYPE=app_store
       - COUNTRIES_FILE=listings/countries-americas.json
       - DB_HOST=db
       - DB_PORT=5432
@@ -38,21 +70,22 @@ services:
       - DB_USER=crawler
       - DB_PASS=crawlerpass
       - PYTHONUNBUFFERED=1
-      - PROXY_HOST=tor-americas
+      - PROXY_HOST=tor-as-americas
       - PROXY_PORT=8118
     depends_on:
       db:
         condition: service_healthy
-      tor-americas:
+      tor-as-americas:
         condition: service_started
     restart: unless-stopped
     networks:
       crawler_net:
         ipv4_address: 172.28.0.11
 
-  crawler-europe:
+  as-europe:
     build: .
     environment:
+      - CRAWLER_TYPE=app_store
       - COUNTRIES_FILE=listings/countries-europe.json
       - DB_HOST=db
       - DB_PORT=5432
@@ -60,21 +93,22 @@ services:
       - DB_USER=crawler
       - DB_PASS=crawlerpass
       - PYTHONUNBUFFERED=1
-      - PROXY_HOST=tor-europe
+      - PROXY_HOST=tor-as-europe
       - PROXY_PORT=8118
     depends_on:
       db:
         condition: service_healthy
-      tor-europe:
+      tor-as-europe:
         condition: service_started
     restart: unless-stopped
     networks:
       crawler_net:
         ipv4_address: 172.28.0.12
 
-  crawler-asia-pacific:
+  as-asia-pacific:
     build: .
     environment:
+      - CRAWLER_TYPE=app_store
       - COUNTRIES_FILE=listings/countries-asia_pacific.json
       - DB_HOST=db
       - DB_PORT=5432
@@ -82,21 +116,22 @@ services:
       - DB_USER=crawler
       - DB_PASS=crawlerpass
       - PYTHONUNBUFFERED=1
-      - PROXY_HOST=tor-asia-pacific
+      - PROXY_HOST=tor-as-asia-pacific
       - PROXY_PORT=8118
     depends_on:
       db:
         condition: service_healthy
-      tor-asia-pacific:
+      tor-as-asia-pacific:
         condition: service_started
     restart: unless-stopped
     networks:
       crawler_net:
         ipv4_address: 172.28.0.13
 
-  crawler-africa-me:
+  as-africa-me:
     build: .
     environment:
+      - CRAWLER_TYPE=app_store
       - COUNTRIES_FILE=listings/countries-africa_middle_east.json
       - DB_HOST=db
       - DB_PORT=5432
@@ -104,18 +139,112 @@ services:
       - DB_USER=crawler
       - DB_PASS=crawlerpass
       - PYTHONUNBUFFERED=1
-      - PROXY_HOST=tor-africa-me
+      - PROXY_HOST=tor-as-africa-me
       - PROXY_PORT=8118
     depends_on:
       db:
         condition: service_healthy
-      tor-africa-me:
+      tor-as-africa-me:
         condition: service_started
     restart: unless-stopped
     networks:
       crawler_net:
         ipv4_address: 172.28.0.14
 
+  # ── Google Play crawlers ─────────────────────
+  gp-americas:
+    build: .
+    environment:
+      - CRAWLER_TYPE=google_play
+      - COUNTRIES_FILE=listings/countries-americas.json
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=appcrawler
+      - DB_USER=crawler
+      - DB_PASS=crawlerpass
+      - PYTHONUNBUFFERED=1
+      - PROXY_HOST=tor-gp-americas
+      - PROXY_PORT=8118
+    depends_on:
+      db:
+        condition: service_healthy
+      tor-gp-americas:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.15
+
+  gp-europe:
+    build: .
+    environment:
+      - CRAWLER_TYPE=google_play
+      - COUNTRIES_FILE=listings/countries-europe.json
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=appcrawler
+      - DB_USER=crawler
+      - DB_PASS=crawlerpass
+      - PYTHONUNBUFFERED=1
+      - PROXY_HOST=tor-gp-europe
+      - PROXY_PORT=8118
+    depends_on:
+      db:
+        condition: service_healthy
+      tor-gp-europe:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.16
+
+  gp-asia-pacific:
+    build: .
+    environment:
+      - CRAWLER_TYPE=google_play
+      - COUNTRIES_FILE=listings/countries-asia_pacific.json
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=appcrawler
+      - DB_USER=crawler
+      - DB_PASS=crawlerpass
+      - PYTHONUNBUFFERED=1
+      - PROXY_HOST=tor-gp-asia-pacific
+      - PROXY_PORT=8118
+    depends_on:
+      db:
+        condition: service_healthy
+      tor-gp-asia-pacific:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.17
+
+  gp-africa-me:
+    build: .
+    environment:
+      - CRAWLER_TYPE=google_play
+      - COUNTRIES_FILE=listings/countries-africa_middle_east.json
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=appcrawler
+      - DB_USER=crawler
+      - DB_PASS=crawlerpass
+      - PYTHONUNBUFFERED=1
+      - PROXY_HOST=tor-gp-africa-me
+      - PROXY_PORT=8118
+    depends_on:
+      db:
+        condition: service_healthy
+      tor-gp-africa-me:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      crawler_net:
+        ipv4_address: 172.28.0.18
+
+  # ── Database ─────────────────────────────────
   db:
     image: postgres:16
     environment:
@@ -131,7 +260,7 @@ services:
         ipv4_address: 172.28.0.10
     command: >
       postgres
-        -c max_connections=200
+        -c max_connections=500
         -c shared_buffers=512MB
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U crawler -d appcrawler"]

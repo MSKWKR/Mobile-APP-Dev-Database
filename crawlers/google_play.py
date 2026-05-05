@@ -13,6 +13,17 @@ from crawlers.search_terms import generate_search_terms, get_country_lang, ALL_L
 # Config
 # ──────────────────────────────────────────────
 
+# Proxy — routes through dedicated Tor exit node per container
+_proxy_host = os.environ.get("PROXY_HOST")
+_proxy_port = os.environ.get("PROXY_PORT", "8118")
+PROXIES = (
+    {
+        "http":  f"http://{_proxy_host}:{_proxy_port}",
+        "https": f"http://{_proxy_host}:{_proxy_port}",
+    }
+    if _proxy_host else None
+)
+
 STORE = "google_play"
 MAX_WORKERS = 4        # reduced from 8 — fewer parallel fetches = less rate limiting
 
@@ -53,7 +64,8 @@ def _search_by_term(term: str, country: str, lang: str = "en") -> list[dict]:
     for attempt in range(retries):
         try:
             time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
-            return search(term, lang=lang, country=country, n_hits=N_HITS)
+            return search(term, lang=lang, country=country, n_hits=N_HITS,
+                         proxies=PROXIES)
         except Exception as e:
             msg = str(e).lower()
             if ("429" in msg or "too many" in msg) and attempt < retries - 1:
@@ -74,7 +86,7 @@ def _fetch_app_details(app_id: str, country: str, retries: int = 5) -> dict | No
     for attempt in range(retries):
         try:
             time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
-            return gplay_app(app_id, lang="en", country=country)
+            return gplay_app(app_id, lang="en", country=country, proxies=PROXIES)
         except Exception as e:
             msg = str(e).lower()
             if ("429" in msg or "too many" in msg) and attempt < retries - 1:
