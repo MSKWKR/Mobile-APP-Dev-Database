@@ -64,8 +64,7 @@ def _search_by_term(term: str, country: str, lang: str = "en") -> list[dict]:
     for attempt in range(retries):
         try:
             time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
-            return search(term, lang=lang, country=country, n_hits=N_HITS,
-                         proxies=PROXIES)
+            return search(term, lang=lang, country=country, n_hits=N_HITS)
         except Exception as e:
             msg = str(e).lower()
             if ("429" in msg or "too many" in msg) and attempt < retries - 1:
@@ -86,7 +85,7 @@ def _fetch_app_details(app_id: str, country: str, retries: int = 5) -> dict | No
     for attempt in range(retries):
         try:
             time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
-            return gplay_app(app_id, lang="en", country=country, proxies=PROXIES)
+            return gplay_app(app_id, lang="en", country=country)
         except Exception as e:
             msg = str(e).lower()
             if ("429" in msg or "too many" in msg) and attempt < retries - 1:
@@ -148,6 +147,7 @@ def _bulk_fetch_and_insert(app_ids: list[str], category_desc: str, country: str)
 # ──────────────────────────────────────────────
 
 def _collect_new_ids(results: list[dict], seen_app_ids: set[str]) -> list[str]:
+    """Dedup within a single sweep only — DB handles cross-country dedup."""
     new_ids = []
     for r in results:
         aid = r.get("appId")
@@ -232,11 +232,12 @@ def _run_language_sweep(country: str, seen_app_ids: set[str]) -> None:
 
 def _crawl_country(country: str) -> None:
     print(f"[{country.upper()}] starting")
-    seen_app_ids: set[str] = set()
 
-    _run_category_sweep(country, seen_app_ids)
-    _run_keyword_sweep(country, seen_app_ids)
-    _run_language_sweep(country, seen_app_ids)
+    # Fresh set per sweep — only deduplicates within one sweep
+    # Cross-sweep and cross-country dedup handled by DB UNIQUE(store, app_id)
+    _run_category_sweep(country, set())
+    _run_keyword_sweep(country, set())
+    _run_language_sweep(country, set())
 
     print(f"[{country.upper()}] DONE")
 

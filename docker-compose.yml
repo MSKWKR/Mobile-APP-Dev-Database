@@ -165,6 +165,8 @@ services:
       - PYTHONUNBUFFERED=1
       - PROXY_HOST=tor-gp-americas
       - PROXY_PORT=8118
+      - HTTP_PROXY=http://tor-gp-americas:8118
+      - HTTPS_PROXY=http://tor-gp-americas:8118
     depends_on:
       db:
         condition: service_healthy
@@ -188,6 +190,8 @@ services:
       - PYTHONUNBUFFERED=1
       - PROXY_HOST=tor-gp-europe
       - PROXY_PORT=8118
+      - HTTP_PROXY=http://tor-gp-europe:8118
+      - HTTPS_PROXY=http://tor-gp-europe:8118
     depends_on:
       db:
         condition: service_healthy
@@ -211,6 +215,8 @@ services:
       - PYTHONUNBUFFERED=1
       - PROXY_HOST=tor-gp-asia-pacific
       - PROXY_PORT=8118
+      - HTTP_PROXY=http://tor-gp-asia-pacific:8118
+      - HTTPS_PROXY=http://tor-gp-asia-pacific:8118
     depends_on:
       db:
         condition: service_healthy
@@ -234,6 +240,8 @@ services:
       - PYTHONUNBUFFERED=1
       - PROXY_HOST=tor-gp-africa-me
       - PROXY_PORT=8118
+      - HTTP_PROXY=http://tor-gp-africa-me:8118
+      - HTTPS_PROXY=http://tor-gp-africa-me:8118
     depends_on:
       db:
         condition: service_healthy
