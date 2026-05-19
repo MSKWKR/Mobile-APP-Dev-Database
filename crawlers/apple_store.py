@@ -14,7 +14,7 @@ from db.crawl_tasks import fetch_task, mark_done, mark_failed
 
 STORE        = "app_store"
 REGION       = os.environ.get("REGION", "default")
-WORKER_COUNT = int(os.environ.get("WORKER_COUNT", 4))
+WORKER_COUNT = int(os.environ.get("WORKER_COUNT", 3))
 
 # Delay between RSS collection requests (same host, reuse session)
 WAIT_COLLECTION = (

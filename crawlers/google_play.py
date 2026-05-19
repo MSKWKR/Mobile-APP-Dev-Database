@@ -17,7 +17,7 @@ from crawlers.search_terms import get_country_lang
 
 STORE        = "google_play"
 REGION       = os.environ.get("REGION", "default")
-WORKER_COUNT = int(os.environ.get("WORKER_COUNT", 4))
+WORKER_COUNT = int(os.environ.get("WORKER_COUNT", 3))
 
 WAIT_TASK = (
     float(os.environ.get("WAIT_TASK_MIN", 0.5)),
