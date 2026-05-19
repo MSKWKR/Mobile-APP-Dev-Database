@@ -65,3 +65,21 @@ def insert_app_version(app_db_id, version):
     conn.commit()
     cur.close()
     conn.close()
+
+def get_developer_emails(limit=10):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT email
+        FROM developers
+        WHERE email IS NOT NULL
+        LIMIT %s
+    """, (limit,))
+
+    emails = [row[0] for row in cur.fetchall()]
+
+    cur.close()
+    conn.close()
+
+    return emails

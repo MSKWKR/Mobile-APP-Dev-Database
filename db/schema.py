@@ -45,6 +45,19 @@ def create_tables():
         )
         """)
 
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS crawl_tasks (
+            id SERIAL PRIMARY KEY,
+            source TEXT NOT NULL,          -- app_store / google_play
+            country TEXT NOT NULL,
+            task_type TEXT NOT NULL,       -- category / keyword / language
+            payload TEXT,                  -- category_id / keyword / lang::term
+            status TEXT DEFAULT 'pending', -- pending / running / done
+            locked_at TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
         conn.commit()
 
     finally:

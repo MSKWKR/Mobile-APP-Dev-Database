@@ -1,99 +1,69 @@
-import json
 import os
-import random
 import time
+import random
+import requests
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from google_play_scraper import app as gplay_app, search
 
 from db.queries import insert_developer, insert_app, insert_app_version
-from crawlers.search_terms import generate_search_terms, get_country_lang, ALL_LANGS, VERTICALS
+from db.crawl_tasks import fetch_task, mark_done
+
+from crawlers.search_terms import (
+    generate_search_terms,
+    get_country_lang,
+    ALL_LANGS,
+    VERTICALS,
+)
 
 # ──────────────────────────────────────────────
-# Config
+# Proxy
 # ──────────────────────────────────────────────
-
-# Proxy — routes through dedicated Tor exit node per container
 _proxy_host = os.environ.get("PROXY_HOST")
 _proxy_port = os.environ.get("PROXY_PORT", "8118")
+
 PROXIES = (
     {
-        "http":  f"http://{_proxy_host}:{_proxy_port}",
+        "http": f"http://{_proxy_host}:{_proxy_port}",
         "https": f"http://{_proxy_host}:{_proxy_port}",
     }
     if _proxy_host else None
 )
 
 STORE = "google_play"
-MAX_WORKERS = 4        # reduced from 8 — fewer parallel fetches = less rate limiting
 
 WAIT_MIN = 0.5
 WAIT_MAX = 1.0
-CATEGORY_WAIT_MIN = 1.0
-CATEGORY_WAIT_MAX = 2.0
-KEYWORD_WAIT_MIN = 0.5
-KEYWORD_WAIT_MAX = 1.0
-LANG_WAIT_MIN = 0.5
-LANG_WAIT_MAX = 1.0
-
 N_HITS = 30
 
-_countries_file = os.environ.get("COUNTRIES_FILE", "listings/countries.json")
-with open(_countries_file, "r") as f:
-    COUNTRIES: list[str] = json.load(f)
-
-with open("listings/google-play-apps-categories.json", "r") as f:
-    _categories_data = json.load(f)
-
-print(f"[CONTAINER] Loaded {len(COUNTRIES)} countries from {_countries_file}")
-
-COUNTRY_WORKERS = min(len(COUNTRIES), 3)
-
-CATEGORY_PAIRS: list[tuple[str, str]] = [
-    (c["category"], c.get("category_description", c["category"]))
-    for c in _categories_data
-]
-
-
 # ──────────────────────────────────────────────
-# Search
+# API wrappers
 # ──────────────────────────────────────────────
 
-def _search_by_term(term: str, country: str, lang: str = "en") -> list[dict]:
-    retries = 5
-    for attempt in range(retries):
+def _search_by_term(term: str, country: str, lang: str = "en"):
+    for attempt in range(5):
         try:
             time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
             return search(term, lang=lang, country=country, n_hits=N_HITS)
         except Exception as e:
             msg = str(e).lower()
-            if ("429" in msg or "too many" in msg) and attempt < retries - 1:
-                # Google eases off fast — short flat backoff is enough
-                wait = 10 + random.uniform(0, 5)
-                print(f"[RATE LIMIT] '{term}' lang={lang} ({country}) → retrying in {wait:.1f}s...")
-                time.sleep(wait)
-            else:
-                return []
+            if ("429" in msg or "too many" in msg) and attempt < 4:
+                time.sleep(10 + random.random() * 5)
+                continue
+            return []
     return []
 
 
-# ──────────────────────────────────────────────
-# App detail fetch
-# ──────────────────────────────────────────────
-
-def _fetch_app_details(app_id: str, country: str, retries: int = 5) -> dict | None:
-    for attempt in range(retries):
+def _fetch_app(app_id: str, country: str):
+    for attempt in range(5):
         try:
             time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
             return gplay_app(app_id, lang="en", country=country)
         except Exception as e:
             msg = str(e).lower()
-            if ("429" in msg or "too many" in msg) and attempt < retries - 1:
-                wait = 10 + random.uniform(0, 5)
-                print(f"[RATE LIMIT] {app_id} → retrying in {wait:.1f}s...")
-                time.sleep(wait)
-            else:
-                return None
+            if ("429" in msg or "too many" in msg) and attempt < 4:
+                time.sleep(10 + random.random() * 5)
+                continue
+            return None
     return None
 
 
@@ -101,164 +71,131 @@ def _fetch_app_details(app_id: str, country: str, retries: int = 5) -> dict | No
 # DB insert
 # ──────────────────────────────────────────────
 
-def _insert_app_info(app_info: dict, category_desc: str, country: str) -> str | None:
+def _insert_app(app_info: dict, country: str):
     try:
+        dev_name = app_info.get("developer")
+        if not dev_name:
+            return
+
         dev_id = insert_developer(
-            name=app_info.get("developer"),
+            name=dev_name,
             email=app_info.get("developerEmail"),
             website=app_info.get("developerWebsite"),
         )
+
         app_db_id = insert_app(
             developer_id=dev_id,
             store=STORE,
             app_id=app_info.get("appId"),
             app_name=app_info.get("title"),
-            category=category_desc,
+            category=app_info.get("genre") or "Unknown",
             country=country,
         )
+
         version = app_info.get("version")
         if version:
             insert_app_version(app_db_id, version)
-        return app_info.get("title")
+
     except Exception as e:
-        print(f"[ERROR] {app_info.get('appId')}: {e}")
-        return None
-
-
-def _bulk_fetch_and_insert(app_ids: list[str], category_desc: str, country: str) -> int:
-    inserted = 0
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {
-            executor.submit(_fetch_app_details, aid, country): aid
-            for aid in app_ids
-        }
-        for future in as_completed(futures):
-            app_info = future.result()
-            if app_info:
-                title = _insert_app_info(app_info, category_desc, country)
-                if title:
-                    inserted += 1
-                    print(f"  [{category_desc}] {inserted}/{len(app_ids)} → {title}")
-    return inserted
+        print(f"[DB ERROR] {app_info.get('appId')}: {e}")
 
 
 # ──────────────────────────────────────────────
-# Sweeps
+# Task processors
 # ──────────────────────────────────────────────
 
-def _collect_new_ids(results: list[dict], seen_app_ids: set[str]) -> list[str]:
-    """Dedup within a single sweep only — DB handles cross-country dedup."""
-    new_ids = []
-    for r in results:
-        aid = r.get("appId")
-        if aid and aid not in seen_app_ids:
-            seen_app_ids.add(aid)
-            new_ids.append(aid)
-    return new_ids
-
-
-def _run_category_sweep(country: str, seen_app_ids: set[str]) -> None:
-    total = len(CATEGORY_PAIRS)
-    print(f"\n--- [{country}] Category sweep ({total} categories) ---")
-
-    for i, (category_id, category_desc) in enumerate(CATEGORY_PAIRS):
-        term = category_desc.lower().replace(" apps", "").replace(" games", "").strip()
-        print(f"\n=== [{country}] [{i+1}/{total}] {category_id} → '{term}' ===")
-
-        langs = ["en"]
-        local_lang = get_country_lang(country)
-        if local_lang != "en":
-            langs.append(local_lang)
-
-        new_ids = []
-        for lang in langs:
-            results = _search_by_term(term, country, lang)
-            new_ids.extend(_collect_new_ids(results, seen_app_ids))
-
-        if new_ids:
-            count = _bulk_fetch_and_insert(new_ids, category_desc, country)
-            print(f"  done — {count} inserted")
-
-        time.sleep(random.uniform(CATEGORY_WAIT_MIN, CATEGORY_WAIT_MAX))
-
-
-def _run_keyword_sweep(country: str, seen_app_ids: set[str]) -> None:
-    search_terms = list(generate_search_terms(country))
-    total = len(search_terms)
-    print(f"\n--- [{country}] Keyword sweep ({total} terms) ---")
-
+def process_category(country: str, category_id: str):
     langs = ["en"]
     local_lang = get_country_lang(country)
     if local_lang != "en":
         langs.append(local_lang)
 
-    for i, term in enumerate(search_terms):
-        new_ids = []
-        for lang in langs:
-            results = _search_by_term(term, country, lang)
-            new_ids.extend(_collect_new_ids(results, seen_app_ids))
+    all_ids = set()
 
-        if new_ids:
-            count = _bulk_fetch_and_insert(new_ids, term, country)
-            print(f"  [{i+1}/{total}] '{term}' → {count} new")
-        else:
-            print(f"  [{i+1}/{total}] '{term}' → 0 new (all dupes)")
+    for lang in langs:
+        results = _search_by_term(category_id, country, lang)
+        for r in results:
+            aid = r.get("appId")
+            if aid:
+                all_ids.add(aid)
 
-        time.sleep(random.uniform(KEYWORD_WAIT_MIN, KEYWORD_WAIT_MAX))
-
-
-def _run_language_sweep(country: str, seen_app_ids: set[str]) -> None:
-    total_langs = len(ALL_LANGS)
-    total_terms = len(VERTICALS)
-    print(f"\n--- [{country}] Language sweep ({total_langs} langs x {total_terms} verticals) ---")
-
-    for li, lang in enumerate(ALL_LANGS):
-        for term in VERTICALS:
-            results = _search_by_term(term, country, lang)
-            new_ids = _collect_new_ids(results, seen_app_ids)
-
-            if new_ids:
-                count = _bulk_fetch_and_insert(new_ids, term, country)
-                print(f"  [lang={lang}] '{term}' → {count} new")
-
-            time.sleep(random.uniform(LANG_WAIT_MIN, LANG_WAIT_MAX))
-
-        print(f"  [lang {li+1}/{total_langs}] '{lang}' done")
+    for app_id in all_ids:
+        app_info = _fetch_app(app_id, country)
+        if app_info:
+            _insert_app(app_info, country)
 
 
-# ──────────────────────────────────────────────
-# Per-country worker
-# ──────────────────────────────────────────────
+def process_keyword(country: str, keyword: str):
+    results = _search_by_term(keyword, country, "en")
 
-def _crawl_country(country: str) -> None:
-    print(f"[{country.upper()}] starting")
+    for r in results:
+        app_id = r.get("appId")
+        if not app_id:
+            continue
 
-    # Fresh set per sweep — only deduplicates within one sweep
-    # Cross-sweep and cross-country dedup handled by DB UNIQUE(store, app_id)
-    _run_category_sweep(country, set())
-    _run_keyword_sweep(country, set())
-    _run_language_sweep(country, set())
+        app_info = _fetch_app(app_id, country)
+        if app_info:
+            _insert_app(app_info, country)
 
-    print(f"[{country.upper()}] DONE")
+
+def process_language(country: str, lang: str, term: str):
+    results = _search_by_term(term, country, lang)
+
+    for r in results:
+        app_id = r.get("appId")
+        if not app_id:
+            continue
+
+        app_info = _fetch_app(app_id, country)
+        if app_info:
+            _insert_app(app_info, country)
 
 
 # ──────────────────────────────────────────────
-# Main crawler
+# Worker loop
 # ──────────────────────────────────────────────
 
-def crawl_google_play() -> None:
+def worker():
+    print("[GOOGLE PLAY WORKER] started")
+
     while True:
-        print(f"[RUN START] {len(COUNTRIES)} countries, {COUNTRY_WORKERS} workers")
-        with ThreadPoolExecutor(max_workers=COUNTRY_WORKERS) as executor:
-            futures = {executor.submit(_crawl_country, c): c for c in COUNTRIES}
-            for future in as_completed(futures):
-                country = futures[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    print(f"[ERROR] {country} crashed: {e}")
-        print("[RUN COMPLETE] restarting...")
+        task = fetch_task()
 
+        if not task:
+            time.sleep(2)
+            continue
+
+        task_id, source, country, task_type, payload = task
+
+        try:
+            if source != "google_play":
+                mark_done(task_id)
+                continue
+
+            # ── category tasks ─────────────────────
+            if task_type == "category":
+                process_category(country, payload)
+
+            # ── keyword tasks ──────────────────────
+            elif task_type == "keyword":
+                process_keyword(country, payload)
+
+            # ── language tasks ──────────────────────
+            elif task_type == "language":
+                lang, term = payload.split("::", 1)
+                process_language(country, lang, term)
+
+            mark_done(task_id)
+
+            print(f"[DONE] {country} | {task_type} | {payload}")
+
+        except Exception as e:
+            print(f"[ERROR] task {task_id}: {e}")
+            # leave task for retry
+
+# ──────────────────────────────────────────────
+# ENTRY
+# ──────────────────────────────────────────────
 
 if __name__ == "__main__":
-    crawl_google_play()
+    worker()

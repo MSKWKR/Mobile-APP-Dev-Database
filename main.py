@@ -1,43 +1,40 @@
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from db.schema import create_tables
 
-CRAWLER_TYPE = os.environ.get("CRAWLER_TYPE")  # "app_store" | "google_play" | None (local)
+CRAWLER_TYPE = os.environ.get("CRAWLER_TYPE")  # app_store | google_play
 
 
 def main():
     create_tables()
 
     if CRAWLER_TYPE == "app_store":
-        from crawlers.apple_store import crawl_app_store
-        print("[CONTAINER] Running App Store crawler")
-        crawl_app_store()
+        from crawlers.apple_store import worker
+        print("[CONTAINER] Starting App Store worker")
+        worker()
 
     elif CRAWLER_TYPE == "google_play":
-        from crawlers.google_play import crawl_google_play
-        print("[CONTAINER] Running Google Play crawler")
-        crawl_google_play()
+        from crawlers.google_play import worker
+        print("[CONTAINER] Starting Google Play worker")
+        worker()
 
     else:
-        # Local run — both in parallel
-        from crawlers.apple_store import crawl_app_store
-        from crawlers.google_play import crawl_google_play
+        # Local debug mode — run both workers in threads
+        from crawlers.apple_store import worker as as_worker
+        from crawlers.google_play import worker as gp_worker
 
-        print("[LOCAL] Running both crawlers in parallel")
-        crawlers = {
-            "google_play": crawl_google_play,
-            "app_store":   crawl_app_store,
-        }
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = {executor.submit(fn): name for name, fn in crawlers.items()}
-            for future in as_completed(futures):
-                name = futures[future]
-                try:
-                    future.result()
-                    print(f"\n[DONE] {name} finished")
-                except Exception as e:
-                    print(f"\n[ERROR] {name} crashed: {e}")
+        import threading
+
+        print("[LOCAL] Running both workers")
+
+        t1 = threading.Thread(target=as_worker)
+        t2 = threading.Thread(target=gp_worker)
+
+        t1.start()
+        t2.start()
+
+        t1.join()
+        t2.join()
 
 
 if __name__ == "__main__":
