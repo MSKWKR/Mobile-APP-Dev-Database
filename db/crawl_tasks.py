@@ -46,9 +46,9 @@ def add_tasks_bulk(tasks: list[tuple]) -> int:
 # FETCH TASK  (region-aware, safe for concurrent workers)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def fetch_task(region: str) -> tuple | None:
+def fetch_task(region: str, source: str) -> tuple | None:
     """
-    Atomically claims one pending task for the given region.
+    Atomically claims one pending task for the given region and source store.
     Uses UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP LOCKED) so multiple
     threads / containers never claim the same row.
     Returns (id, source, country, task_type, payload, region) or None.
@@ -67,12 +67,13 @@ def fetch_task(region: str) -> tuple | None:
                         FROM   crawl_tasks
                         WHERE  status = 'pending'
                           AND  region = %s
+                          AND  source = %s
                         ORDER  BY id
                         FOR UPDATE SKIP LOCKED
                         LIMIT  1
                     )
                     RETURNING id, source, country, task_type, payload, region
-                """, (region,))
+                """, (region, source))
                 task = cur.fetchone()
                 conn.commit()
                 return task

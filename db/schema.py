@@ -77,7 +77,7 @@ def create_tables():
                 # Partial index — only covers pending rows, stays small as tasks are consumed
                 cur.execute("""
                     CREATE INDEX IF NOT EXISTS idx_crawl_tasks_queue
-                        ON crawl_tasks (region, status, id)
+                        ON crawl_tasks (source, region, status, id)
                         WHERE status = 'pending'
                 """)
 

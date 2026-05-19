@@ -195,18 +195,13 @@ def _worker(worker_id: int):
     print(f"[AS WORKER-{worker_id}] started  region={REGION}", flush=True)
 
     while True:
-        task = fetch_task(REGION)
+        task = fetch_task(REGION, STORE)
 
         if not task:
             time.sleep(2)
             continue
 
-        task_id, source, country, task_type, payload, _region = task
-
-        # Safety check — skip tasks that don't belong to this crawler
-        if source != STORE:
-            mark_done(task_id)
-            continue
+        task_id, _, country, task_type, payload, _ = task
 
         try:
             if task_type == "category":

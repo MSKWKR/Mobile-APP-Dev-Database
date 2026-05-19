@@ -2,6 +2,7 @@ import os
 import threading
 
 from db.schema import create_tables
+from db.crawl_tasks import reset_stuck_tasks
 
 CRAWLER_TYPE = os.environ.get("CRAWLER_TYPE")   # app_store | google_play
 REGION       = os.environ.get("REGION", "default")
@@ -9,6 +10,7 @@ REGION       = os.environ.get("REGION", "default")
 
 def main():
     create_tables()
+    reset_stuck_tasks()
 
     if CRAWLER_TYPE == "app_store":
         from crawlers.apple_store import worker
