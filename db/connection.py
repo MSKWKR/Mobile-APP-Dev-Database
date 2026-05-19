@@ -11,11 +11,11 @@ def _get_pool() -> pool.ThreadedConnectionPool:
         _pool = pool.ThreadedConnectionPool(
             minconn=2,
             maxconn=int(os.environ.get("DB_POOL_SIZE", 10)),
-            host=os.environ["DB_HOST"],
+            host=os.environ.get("DB_HOST", "localhost"),
             port=int(os.environ.get("DB_PORT", 5432)),
-            dbname=os.environ["DB_NAME"],
-            user=os.environ["DB_USER"],
-            password=os.environ["DB_PASS"],
+            dbname=os.environ.get("DB_NAME", "appcrawler"),
+            user=os.environ.get("DB_USER", "crawler"),
+            password=os.environ.get("DB_PASS", "crawlerpass"),
         )
     return _pool
 
