@@ -6,11 +6,21 @@ from db.crawl_tasks import add_tasks_bulk
 from crawlers.search_terms import generate_search_terms, ALL_LANGS, VERTICALS
 
 
-# ──────────────────────────────────────────────
-# LOAD DATA
-# ──────────────────────────────────────────────
-with open("listings/countries.json") as f:
-    COUNTRIES = json.load(f)
+# ──────────────────────────────────────────────────────────────────────────────
+# REGION MAP
+# Keys must exactly match the REGION env var set in docker-compose.yml
+# ──────────────────────────────────────────────────────────────────────────────
+
+REGION_FILES = {
+    "americas":     "listings/countries-americas.json",
+    "europe":       "listings/countries-europe.json",
+    "asia-pacific": "listings/countries-asia_pacific.json",
+    "africa-me":    "listings/countries-africa_middle_east.json",
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# LOAD CATEGORY LISTS
+# ──────────────────────────────────────────────────────────────────────────────
 
 with open("listings/apple-appstore-categories.json") as f:
     APPLE_CATEGORIES = json.load(f)
@@ -18,61 +28,60 @@ with open("listings/apple-appstore-categories.json") as f:
 with open("listings/google-play-apps-categories.json") as f:
     GP_CATEGORIES = json.load(f)
 
-print(f"[SEED] countries loaded: {len(COUNTRIES)}", flush=True)
+# ──────────────────────────────────────────────────────────────────────────────
+# BUILD AND INSERT TASKS PER REGION
+# ──────────────────────────────────────────────────────────────────────────────
+
+total_as = 0
+total_gp = 0
+
+for region, filepath in REGION_FILES.items():
+    with open(filepath) as f:
+        countries = json.load(f)
+
+    print(f"[SEED] region={region}  countries={len(countries)}", flush=True)
+
+    # ── App Store tasks ───────────────────────────────────────────────────────
+    app_tasks: list[tuple] = []
+
+    for country in countries:
+        for cat in APPLE_CATEGORIES:
+            app_tasks.append((
+                "app_store", country, "category", cat["category"], region,
+            ))
+
+        for term in generate_search_terms(country):
+            app_tasks.append((
+                "app_store", country, "keyword", term, region,
+            ))
+
+    inserted = add_tasks_bulk(app_tasks)
+    total_as += inserted
+    print(f"[SEED] app_store  region={region}  queued={len(app_tasks)}  inserted={inserted}", flush=True)
+
+    # ── Google Play tasks ─────────────────────────────────────────────────────
+    gp_tasks: list[tuple] = []
+
+    for country in countries:
+        for cat in GP_CATEGORIES:
+            gp_tasks.append((
+                "google_play", country, "category", cat["category"], region,
+            ))
+
+        for term in generate_search_terms(country):
+            gp_tasks.append((
+                "google_play", country, "keyword", term, region,
+            ))
+
+        for lang in ALL_LANGS:
+            for term in VERTICALS:
+                gp_tasks.append((
+                    "google_play", country, "language", f"{lang}::{term}", region,
+                ))
+
+    inserted = add_tasks_bulk(gp_tasks)
+    total_gp += inserted
+    print(f"[SEED] google_play  region={region}  queued={len(gp_tasks)}  inserted={inserted}", flush=True)
 
 
-# ──────────────────────────────────────────────
-# APP STORE TASKS
-# ──────────────────────────────────────────────
-print("[SEED] building app_store tasks...", flush=True)
-
-app_tasks = []
-
-for country in COUNTRIES:
-    for cat in APPLE_CATEGORIES:
-        app_tasks.append(
-            ("app_store", country, "category", cat["category"])
-        )
-
-    for term in generate_search_terms(country):
-        app_tasks.append(
-            ("app_store", country, "keyword", term)
-        )
-
-print(f"[SEED] app_store tasks built: {len(app_tasks)}", flush=True)
-
-inserted = add_tasks_bulk(app_tasks)
-print(f"[SEED] app_store inserted: {inserted}", flush=True)
-
-
-# ──────────────────────────────────────────────
-# GOOGLE PLAY TASKS
-# ──────────────────────────────────────────────
-print("[SEED] building google_play tasks...", flush=True)
-
-gp_tasks = []
-
-for country in COUNTRIES:
-    for cat in GP_CATEGORIES:
-        gp_tasks.append(
-            ("google_play", country, "category", cat["category"])
-        )
-
-    for term in generate_search_terms(country):
-        gp_tasks.append(
-            ("google_play", country, "keyword", term)
-        )
-
-    for lang in ALL_LANGS:
-        for term in VERTICALS:
-            gp_tasks.append(
-                ("google_play", country, "language", f"{lang}::{term}")
-            )
-
-print(f"[SEED] google_play tasks built: {len(gp_tasks)}", flush=True)
-
-inserted = add_tasks_bulk(gp_tasks)
-print(f"[SEED] google_play inserted: {inserted}", flush=True)
-
-
-print("[SEED] done", flush=True)
+print(f"[SEED] done  total_app_store={total_as}  total_google_play={total_gp}", flush=True)

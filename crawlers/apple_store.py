@@ -1,29 +1,41 @@
 import os
 import time
 import random
+import threading
+
 import requests
 
 from db.queries import insert_developer, insert_app, insert_app_version
-from db.crawl_tasks import fetch_task, mark_done
+from db.crawl_tasks import fetch_task, mark_done, mark_failed
 
-# ──────────────────────────────────────────────
-# Proxy setup (unchanged)
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# CONFIG  (all tunable via env vars — no redeploy needed)
+# ──────────────────────────────────────────────────────────────────────────────
+
+STORE        = "app_store"
+REGION       = os.environ.get("REGION", "default")
+WORKER_COUNT = int(os.environ.get("WORKER_COUNT", 4))
+
+# Delay between RSS collection requests (same host, reuse session)
+WAIT_COLLECTION = (
+    float(os.environ.get("WAIT_COL_MIN", 1.0)),
+    float(os.environ.get("WAIT_COL_MAX", 2.0)),
+)
+# Delay between task-level requests (search, lookup)
+WAIT_TASK = (
+    float(os.environ.get("WAIT_TASK_MIN", 0.5)),
+    float(os.environ.get("WAIT_TASK_MAX", 1.5)),
+)
+
 _proxy_host = os.environ.get("PROXY_HOST")
 _proxy_port = os.environ.get("PROXY_PORT", "8118")
-
 PROXIES = (
     {
-        "http": f"http://{_proxy_host}:{_proxy_port}",
+        "http":  f"http://{_proxy_host}:{_proxy_port}",
         "https": f"http://{_proxy_host}:{_proxy_port}",
     }
     if _proxy_host else None
 )
-
-STORE = "app_store"
-
-WAIT_MIN = 3.0
-WAIT_MAX = 5.0
 
 HEADERS = {
     "User-Agent": (
@@ -42,66 +54,81 @@ COLLECTIONS = [
     "newpaidapplications",
 ]
 
-# ──────────────────────────────────────────────
-# iTunes helpers
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# PER-THREAD SESSION  (connection reuse, no lock contention)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_local = threading.local()
+
+
+def _session() -> requests.Session:
+    """Returns a requests.Session local to the calling thread."""
+    if not hasattr(_local, "session"):
+        s = requests.Session()
+        s.headers.update(HEADERS)
+        if PROXIES:
+            s.proxies.update(PROXIES)
+        _local.session = s
+    return _local.session
+
+
+def _sleep(range_: tuple[float, float]):
+    time.sleep(random.uniform(*range_))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# iTunes / RSS HELPERS
+# ──────────────────────────────────────────────────────────────────────────────
 
 def _search_category(category_id: str, country: str) -> list[str]:
-    seen = set()
-    app_ids = []
+    seen: set[str] = set()
+    app_ids: list[str] = []
 
     for collection in COLLECTIONS:
         url = (
             f"https://itunes.apple.com/{country}/rss/{collection}"
             f"/limit=200/genre={category_id}/json"
         )
-
         try:
-            time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
-            resp = requests.get(url, headers=HEADERS, timeout=15, proxies=PROXIES)
+            _sleep(WAIT_COLLECTION)
+            resp = _session().get(url, timeout=15)
             resp.raise_for_status()
 
-            entries = resp.json().get("feed", {}).get("entry", [])
-
-            for entry in entries:
+            for entry in resp.json().get("feed", {}).get("entry", []):
                 try:
                     aid = entry["id"]["attributes"]["im:id"]
                     if aid not in seen:
                         seen.add(aid)
                         app_ids.append(aid)
-                except:
+                except (KeyError, TypeError):
                     continue
 
         except Exception as e:
-            print(f"[WARN] category {category_id} failed: {e}")
+            print(f"[WARN] category {category_id}/{collection} ({country}): {e}")
 
     return app_ids
 
 
-def _fetch_batch(app_ids: list[str], country: str):
+def _fetch_batch(app_ids: list[str], country: str) -> list[dict]:
     try:
-        time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
-
+        _sleep(WAIT_TASK)
         url = (
             "https://itunes.apple.com/lookup"
             f"?id={','.join(app_ids)}&country={country}"
         )
-
-        resp = requests.get(url, headers=HEADERS, timeout=20, proxies=PROXIES)
+        resp = _session().get(url, timeout=20)
         resp.raise_for_status()
-
         return resp.json().get("results", [])
-
     except Exception as e:
-        print(f"[WARN] batch fetch failed: {e}")
+        print(f"[WARN] batch fetch failed ({country}): {e}")
         return []
 
 
-# ──────────────────────────────────────────────
-# DB insert
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# DB INSERT
+# ──────────────────────────────────────────────────────────────────────────────
 
-def _insert_app(app_info: dict, country: str) -> None:
+def _insert_app(app_info: dict, country: str):
     try:
         name = app_info.get("artistName") or app_info.get("sellerName")
         if not name:
@@ -112,103 +139,102 @@ def _insert_app(app_info: dict, country: str) -> None:
             email=None,
             website=app_info.get("sellerUrl"),
         )
-
         app_db_id = insert_app(
             developer_id=dev_id,
             store=STORE,
-            app_id=str(app_info.get("trackId")),
+            app_id=str(app_info["trackId"]),
             app_name=app_info.get("trackName"),
             category=app_info.get("primaryGenreName") or "Unknown",
             country=country,
         )
-
-        version = app_info.get("version")
-        if version:
+        if version := app_info.get("version"):
             insert_app_version(app_db_id, version)
 
     except Exception as e:
-        print(f"[DB ERROR] {app_info.get('trackId')}: {e}")
+        print(f"[DB ERROR] trackId={app_info.get('trackId')}: {e}")
 
 
-# ──────────────────────────────────────────────
-# Task processors
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# TASK PROCESSORS
+# ──────────────────────────────────────────────────────────────────────────────
 
 def process_category(country: str, category_id: str):
     app_ids = _search_category(category_id, country)
-
     if not app_ids:
         return
 
     for i in range(0, len(app_ids), 200):
-        batch = app_ids[i:i+200]
-        apps = _fetch_batch(batch, country)
-
-        for app in apps:
+        batch = app_ids[i : i + 200]
+        for app in _fetch_batch(batch, country):
             _insert_app(app, country)
 
 
 def process_keyword(country: str, keyword: str):
     try:
-        time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
-
+        _sleep(WAIT_TASK)
         url = (
             "https://itunes.apple.com/search"
             f"?term={requests.utils.quote(keyword)}"
             f"&entity=software&country={country}&limit=200"
         )
-
-        resp = requests.get(url, headers=HEADERS, timeout=15, proxies=PROXIES)
+        resp = _session().get(url, timeout=15)
         resp.raise_for_status()
 
-        results = resp.json().get("results", [])
-
-        for r in results:
+        for r in resp.json().get("results", []):
             _insert_app(r, country)
 
     except Exception as e:
-        print(f"[WARN] keyword '{keyword}' failed: {e}")
+        print(f"[WARN] keyword '{keyword}' ({country}): {e}")
 
 
-# ──────────────────────────────────────────────
-# Worker loop
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# SINGLE WORKER LOOP
+# ──────────────────────────────────────────────────────────────────────────────
 
-def worker():
-    print("[APP STORE WORKER] started")
+def _worker(worker_id: int):
+    print(f"[AS WORKER-{worker_id}] started  region={REGION}", flush=True)
 
     while True:
-        task = fetch_task()
+        task = fetch_task(REGION)
 
         if not task:
             time.sleep(2)
             continue
 
-        task_id, source, country, task_type, payload = task
+        task_id, source, country, task_type, payload, _region = task
+
+        # Safety check — skip tasks that don't belong to this crawler
+        if source != STORE:
+            mark_done(task_id)
+            continue
 
         try:
-            if source != "app_store":
-                mark_done(task_id)
-                continue
-
             if task_type == "category":
                 process_category(country, payload)
-
             elif task_type == "keyword":
                 process_keyword(country, payload)
+            else:
+                print(f"[AS WORKER-{worker_id}] unknown task_type '{task_type}', skipping")
 
             mark_done(task_id)
-
-            print(f"[DONE] {country} | {task_type} | {payload}")
+            print(f"[AS WORKER-{worker_id}][DONE] {country} | {task_type} | {payload}", flush=True)
 
         except Exception as e:
-            print(f"[ERROR] task {task_id}: {e}")
-            # optional: you can leave it unmarked for retry
+            print(f"[AS WORKER-{worker_id}][ERROR] task {task_id}: {e}", flush=True)
+            mark_failed(task_id, error=str(e))
 
 
-# ──────────────────────────────────────────────
-# ENTRY POINT
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# ENTRYPOINT  (called from main.py)
+# ──────────────────────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
-    worker()
+def worker():
+    """Spawns WORKER_COUNT threads, each running an independent worker loop."""
+    threads = [
+        threading.Thread(target=_worker, args=(i,), daemon=True)
+        for i in range(WORKER_COUNT)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()

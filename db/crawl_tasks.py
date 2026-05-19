@@ -1,132 +1,142 @@
-from db.connection import get_connection
 from psycopg2.extras import execute_values
 
+from db.connection import get_connection
 
-# ──────────────────────────────────────────────
+
+# ──────────────────────────────────────────────────────────────────────────────
 # SINGLE INSERT
-# ──────────────────────────────────────────────
-def add_task(source, country, task_type, payload, region):
-    conn = get_connection()
-    cur = conn.cursor()
+# ──────────────────────────────────────────────────────────────────────────────
 
-    cur.execute("""
-        INSERT INTO crawl_tasks (source, country, task_type, payload, region)
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT DO NOTHING
-    """, (source, country, task_type, payload, region))
-
-    conn.commit()
-    cur.close()
-    conn.close()
+def add_task(source: str, country: str, task_type: str, payload: str, region: str):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO crawl_tasks (source, country, task_type, payload, region)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+            """, (source, country, task_type, payload, region))
+            conn.commit()
 
 
-# ──────────────────────────────────────────────
-# BULK INSERT (USED BY SEED)
-# ──────────────────────────────────────────────
-def add_tasks_bulk(tasks):
+# ──────────────────────────────────────────────────────────────────────────────
+# BULK INSERT  (used by seed_tasks.py)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def add_tasks_bulk(tasks: list[tuple]) -> int:
     """
-    tasks = [
-        (source, country, task_type, payload, region),
-        ...
-    ]
+    tasks = [(source, country, task_type, payload, region), ...]
+    Returns the number of rows passed in (duplicates are silently skipped).
     """
-
     if not tasks:
         return 0
 
-    conn = get_connection()
-    cur = conn.cursor()
-
-    execute_values(
-        cur,
-        """
-        INSERT INTO crawl_tasks (source, country, task_type, payload, region)
-        VALUES %s
-        ON CONFLICT DO NOTHING
-        """,
-        tasks
-    )
-
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            execute_values(cur, """
+                INSERT INTO crawl_tasks (source, country, task_type, payload, region)
+                VALUES %s
+                ON CONFLICT DO NOTHING
+            """, tasks)
+            conn.commit()
 
     return len(tasks)
 
 
-# ──────────────────────────────────────────────
-# FETCH TASK (REGION-AWARE QUEUE)
-# ──────────────────────────────────────────────
-def fetch_task(region: str):
-    conn = get_connection()
-    conn.autocommit = False
-    cur = conn.cursor()
+# ──────────────────────────────────────────────────────────────────────────────
+# FETCH TASK  (region-aware, safe for concurrent workers)
+# ──────────────────────────────────────────────────────────────────────────────
 
-    try:
-        cur.execute("""
-            UPDATE crawl_tasks
-            SET status = 'running',
-                locked_at = NOW()
-            WHERE id = (
-                SELECT id
-                FROM crawl_tasks
-                WHERE status = 'pending'
-                AND region = %s
-                ORDER BY id
-                FOR UPDATE SKIP LOCKED
-                LIMIT 1
-            )
-            RETURNING id, source, country, task_type, payload, region
-        """, (region,))
+def fetch_task(region: str) -> tuple | None:
+    """
+    Atomically claims one pending task for the given region.
+    Uses UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP LOCKED) so multiple
+    threads / containers never claim the same row.
+    Returns (id, source, country, task_type, payload, region) or None.
+    """
+    with get_connection() as conn:
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            try:
+                cur.execute("""
+                    UPDATE crawl_tasks
+                    SET    status    = 'running',
+                           locked_at = NOW(),
+                           updated_at = NOW()
+                    WHERE  id = (
+                        SELECT id
+                        FROM   crawl_tasks
+                        WHERE  status = 'pending'
+                          AND  region = %s
+                        ORDER  BY id
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT  1
+                    )
+                    RETURNING id, source, country, task_type, payload, region
+                """, (region,))
+                task = cur.fetchone()
+                conn.commit()
+                return task
+            except Exception as e:
+                conn.rollback()
+                print(f"[QUEUE ERROR] fetch_task: {e}")
+                return None
 
-        task = cur.fetchone()
-        conn.commit()
 
-        return task
-
-    except Exception as e:
-        conn.rollback()
-        print(f"[QUEUE ERROR] fetch_task: {e}")
-        return None
-
-    finally:
-        cur.close()
-        conn.close()
-
-
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # MARK DONE
-# ──────────────────────────────────────────────
-def mark_done(task_id):
-    conn = get_connection()
-    cur = conn.cursor()
+# ──────────────────────────────────────────────────────────────────────────────
 
-    cur.execute("""
-        UPDATE crawl_tasks
-        SET status = 'done',
-            updated_at = NOW()
-        WHERE id = %s
-    """, (task_id,))
-
-    conn.commit()
-    cur.close()
-    conn.close()
+def mark_done(task_id: int):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE crawl_tasks
+                SET    status     = 'done',
+                       updated_at = NOW()
+                WHERE  id = %s
+            """, (task_id,))
+            conn.commit()
 
 
-# ──────────────────────────────────────────────
-# RESET STUCK TASKS (OPTIONAL)
-# ──────────────────────────────────────────────
-def reset_stuck_tasks(timeout_minutes=30):
-    conn = get_connection()
-    cur = conn.cursor()
+# ──────────────────────────────────────────────────────────────────────────────
+# MARK FAILED  (auto-retry up to 3 attempts, then 'dead')
+# ──────────────────────────────────────────────────────────────────────────────
 
-    cur.execute("""
-        UPDATE crawl_tasks
-        SET status = 'pending'
-        WHERE status = 'running'
-        AND locked_at < NOW() - INTERVAL '%s minutes'
-    """ % timeout_minutes)
+def mark_failed(task_id: int, error: str = None):
+    """
+    Increments retries.  If retries < 3 the task goes back to 'pending'
+    so another worker can retry it.  After 3 failures it becomes 'dead'.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE crawl_tasks
+                SET    status     = CASE WHEN retries + 1 >= 3 THEN 'dead' ELSE 'pending' END,
+                       retries    = retries + 1,
+                       last_error = %s,
+                       updated_at = NOW()
+                WHERE  id = %s
+            """, (error, task_id))
+            conn.commit()
 
-    conn.commit()
-    cur.close()
-    conn.close()
+
+# ──────────────────────────────────────────────────────────────────────────────
+# RESET STUCK TASKS  (run periodically via cron / scheduler)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def reset_stuck_tasks(timeout_minutes: int = 30):
+    """
+    Tasks that have been 'running' longer than timeout_minutes are assumed
+    to belong to a dead worker and are reset to 'pending'.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE crawl_tasks
+                SET    status     = 'pending',
+                       retries    = retries + 1,
+                       updated_at = NOW()
+                WHERE  status    = 'running'
+                  AND  locked_at < NOW() - (INTERVAL '1 minute' * %s)
+            """, (timeout_minutes,))
+            conn.commit()
