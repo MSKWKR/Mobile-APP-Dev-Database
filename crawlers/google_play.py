@@ -18,13 +18,10 @@ from crawlers.search_terms import get_country_lang
 
 STORE        = "google_play"
 REGION       = os.environ.get("REGION", "default")
-WORKER_COUNT = int(os.environ.get("WORKER_COUNT", 3))
-FETCH_WORKERS = int(os.environ.get("FETCH_WORKERS", 4))
+WORKER_COUNT  = int(os.environ.get("WORKER_COUNT", 4))
+FETCH_WORKERS = int(os.environ.get("FETCH_WORKERS", 24))
 
-WAIT_TASK = (
-    float(os.environ.get("WAIT_TASK_MIN", 0.5)),
-    float(os.environ.get("WAIT_TASK_MAX", 1.0)),
-)
+WAIT_TASK = (0.1, 0.3)
 
 N_HITS = 30
 
@@ -44,8 +41,14 @@ def _sleep(range_: tuple[float, float] = WAIT_TASK):
 # API WRAPPERS  (retry on 429, per-thread session)
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _backoff(msg: str) -> float:
+    if "429" in msg or "too many" in msg:
+        return 15 + random.random() * 10   # rate-limited — give Google time to ease off
+    return 2 + random.random() * 3         # transient proxy/network error — retry quickly
+
+
 def _is_retryable(msg: str) -> bool:
-    return any(k in msg for k in ("429", "too many", "503", "tunnel", "forwarding", "connection"))
+    return any(k in msg for k in ("429", "too many", "503", "tunnel", "forwarding", "connection", "incompleteread"))
 
 
 def _search_by_term(term: str, country: str, lang: str = "en") -> list[dict]:
@@ -61,7 +64,7 @@ def _search_by_term(term: str, country: str, lang: str = "en") -> list[dict]:
         except Exception as e:
             msg = str(e).lower()
             if _is_retryable(msg) and attempt < 4:
-                time.sleep(15 + random.random() * 10)
+                time.sleep(_backoff(msg))
                 continue
             print(f"[WARN] search '{term}' ({country}/{lang}): {e}")
             return []
@@ -76,7 +79,7 @@ def _fetch_app(app_id: str, country: str) -> dict | None:
         except Exception as e:
             msg = str(e).lower()
             if _is_retryable(msg) and attempt < 4:
-                time.sleep(15 + random.random() * 10)
+                time.sleep(_backoff(msg))
                 continue
             print(f"[WARN] fetch app {app_id} ({country}): {e}")
             return None
@@ -120,9 +123,11 @@ def _insert_app(app_info: dict, country: str):
 def _bulk_fetch_and_insert(app_ids: list[str], country: str) -> None:
     with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as ex:
         futures = {ex.submit(_fetch_app, aid, country): aid for aid in app_ids}
-        for f in as_completed(futures):
+        total = len(futures)
+        for done, f in enumerate(as_completed(futures), 1):
             if app_info := f.result():
                 _insert_app(app_info, country)
+                print(f"[GP] {country} {done}/{total} {app_info.get('appId')}", flush=True)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -132,6 +137,7 @@ def _bulk_fetch_and_insert(app_ids: list[str], country: str) -> None:
 def process_category(country: str, category_id: str):
     desc = _CATEGORY_DESC.get(category_id, category_id)
     term = desc.lower().replace(" apps", "").replace(" games", "").strip()
+    print(f"[GP] searching {country} | {term}", flush=True)
 
     langs = ["en"]
     local_lang = get_country_lang(country)
@@ -149,6 +155,7 @@ def process_category(country: str, category_id: str):
 
 
 def process_keyword(country: str, keyword: str):
+    print(f"[GP] searching {country} | {keyword}", flush=True)
     app_ids = [r["appId"] for r in _search_by_term(keyword, country, "en") if r.get("appId")]
     if app_ids:
         _bulk_fetch_and_insert(app_ids, country)
@@ -171,7 +178,7 @@ def _worker(worker_id: int):
         task = fetch_task(REGION, STORE)
 
         if not task:
-            time.sleep(2)
+            time.sleep(0.5)
             continue
 
         task_id, _, country, task_type, payload, _ = task
