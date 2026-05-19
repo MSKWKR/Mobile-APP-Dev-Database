@@ -63,6 +63,17 @@ def create_tables():
                     )
                 """)
 
+                # Migrate existing tables that predate the region/retries columns.
+                # ADD COLUMN IF NOT EXISTS is a no-op when the column already exists,
+                # so this is safe to run on every startup.
+                cur.execute("""
+                    ALTER TABLE crawl_tasks
+                        ADD COLUMN IF NOT EXISTS region     TEXT        NOT NULL DEFAULT 'default',
+                        ADD COLUMN IF NOT EXISTS retries    INTEGER     NOT NULL DEFAULT 0,
+                        ADD COLUMN IF NOT EXISTS last_error TEXT,
+                        ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()
+                """)
+
                 # Partial index — only covers pending rows, stays small as tasks are consumed
                 cur.execute("""
                     CREATE INDEX IF NOT EXISTS idx_crawl_tasks_queue
