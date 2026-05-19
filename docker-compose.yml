@@ -64,7 +64,7 @@ services:
     environment:
       - CRAWLER_TYPE=app_store
       - REGION=americas
-      - WORKER_COUNT=4
+      - WORKER_COUNT=1
       - DB_POOL_SIZE=6
       - WAIT_COL_MIN=1.0
       - WAIT_COL_MAX=2.0
@@ -93,7 +93,7 @@ services:
     environment:
       - CRAWLER_TYPE=app_store
       - REGION=europe
-      - WORKER_COUNT=4
+      - WORKER_COUNT=1
       - DB_POOL_SIZE=6
       - WAIT_COL_MIN=1.0
       - WAIT_COL_MAX=2.0
@@ -122,7 +122,7 @@ services:
     environment:
       - CRAWLER_TYPE=app_store
       - REGION=asia-pacific
-      - WORKER_COUNT=4
+      - WORKER_COUNT=1
       - DB_POOL_SIZE=6
       - WAIT_COL_MIN=1.0
       - WAIT_COL_MAX=2.0
@@ -151,7 +151,7 @@ services:
     environment:
       - CRAWLER_TYPE=app_store
       - REGION=africa-me
-      - WORKER_COUNT=4
+      - WORKER_COUNT=1
       - DB_POOL_SIZE=6
       - WAIT_COL_MIN=1.0
       - WAIT_COL_MAX=2.0
@@ -181,7 +181,7 @@ services:
     environment:
       - CRAWLER_TYPE=google_play
       - REGION=americas
-      - WORKER_COUNT=4
+      - WORKER_COUNT=1
       - DB_POOL_SIZE=6
       - WAIT_COL_MIN=1.0
       - WAIT_COL_MAX=2.0
@@ -212,7 +212,7 @@ services:
     environment:
       - CRAWLER_TYPE=google_play
       - REGION=europe
-      - WORKER_COUNT=4
+      - WORKER_COUNT=1
       - DB_POOL_SIZE=6
       - WAIT_COL_MIN=1.0
       - WAIT_COL_MAX=2.0
@@ -243,7 +243,7 @@ services:
     environment:
       - CRAWLER_TYPE=google_play
       - REGION=asia-pacific
-      - WORKER_COUNT=4
+      - WORKER_COUNT=1
       - DB_POOL_SIZE=6
       - WAIT_COL_MIN=1.0
       - WAIT_COL_MAX=2.0
@@ -274,7 +274,7 @@ services:
     environment:
       - CRAWLER_TYPE=google_play
       - REGION=africa-me
-      - WORKER_COUNT=4
+      - WORKER_COUNT=1
       - DB_POOL_SIZE=6
       - WAIT_COL_MIN=1.0
       - WAIT_COL_MAX=2.0
