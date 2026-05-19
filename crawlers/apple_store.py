@@ -16,16 +16,8 @@ STORE        = "app_store"
 REGION       = os.environ.get("REGION", "default")
 WORKER_COUNT = int(os.environ.get("WORKER_COUNT", 3))
 
-# Delay between RSS collection requests (same host, reuse session)
-WAIT_COLLECTION = (
-    float(os.environ.get("WAIT_COL_MIN", 1.0)),
-    float(os.environ.get("WAIT_COL_MAX", 2.0)),
-)
-# Delay between task-level requests (search, lookup)
-WAIT_TASK = (
-    float(os.environ.get("WAIT_TASK_MIN", 0.5)),
-    float(os.environ.get("WAIT_TASK_MAX", 1.5)),
-)
+WAIT_COLLECTION = (1.0, 2.0)
+WAIT_TASK       = (0.5, 1.5)
 
 _proxy_host = os.environ.get("PROXY_HOST")
 _proxy_port = os.environ.get("PROXY_PORT", "8118")
