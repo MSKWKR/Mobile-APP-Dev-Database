@@ -1,75 +1,103 @@
 import os
 import time
 import random
-import requests
+import threading
 
+import requests
 from google_play_scraper import app as gplay_app, search
 
 from db.queries import insert_developer, insert_app, insert_app_version
-from db.crawl_tasks import fetch_task, mark_done
+from db.crawl_tasks import fetch_task, mark_done, mark_failed
 
-from crawlers.search_terms import (
-    generate_search_terms,
-    get_country_lang,
-    ALL_LANGS,
-    VERTICALS,
+from crawlers.search_terms import get_country_lang
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CONFIG  (all tunable via env vars — no redeploy needed)
+# ──────────────────────────────────────────────────────────────────────────────
+
+STORE        = "google_play"
+REGION       = os.environ.get("REGION", "default")
+WORKER_COUNT = int(os.environ.get("WORKER_COUNT", 4))
+
+WAIT_TASK = (
+    float(os.environ.get("WAIT_TASK_MIN", 0.5)),
+    float(os.environ.get("WAIT_TASK_MAX", 1.0)),
 )
 
-# ──────────────────────────────────────────────
-# Proxy
-# ──────────────────────────────────────────────
+N_HITS = 30
+
 _proxy_host = os.environ.get("PROXY_HOST")
 _proxy_port = os.environ.get("PROXY_PORT", "8118")
-
 PROXIES = (
     {
-        "http": f"http://{_proxy_host}:{_proxy_port}",
+        "http":  f"http://{_proxy_host}:{_proxy_port}",
         "https": f"http://{_proxy_host}:{_proxy_port}",
     }
     if _proxy_host else None
 )
 
-STORE = "google_play"
+# ──────────────────────────────────────────────────────────────────────────────
+# PER-THREAD SESSION
+# ──────────────────────────────────────────────────────────────────────────────
 
-WAIT_MIN = 0.5
-WAIT_MAX = 1.0
-N_HITS = 30
+_local = threading.local()
 
-# ──────────────────────────────────────────────
-# API wrappers
-# ──────────────────────────────────────────────
 
-def _search_by_term(term: str, country: str, lang: str = "en"):
+def _session() -> requests.Session:
+    if not hasattr(_local, "session"):
+        s = requests.Session()
+        if PROXIES:
+            s.proxies.update(PROXIES)
+        _local.session = s
+    return _local.session
+
+
+def _sleep(range_: tuple[float, float] = WAIT_TASK):
+    time.sleep(random.uniform(*range_))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# API WRAPPERS  (retry on 429, per-thread session)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _search_by_term(term: str, country: str, lang: str = "en") -> list[dict]:
     for attempt in range(5):
         try:
-            time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
-            return search(term, lang=lang, country=country, n_hits=N_HITS)
+            _sleep()
+            return search(
+                term,
+                lang=lang,
+                country=country,
+                n_hits=N_HITS,
+            )
         except Exception as e:
             msg = str(e).lower()
             if ("429" in msg or "too many" in msg) and attempt < 4:
                 time.sleep(10 + random.random() * 5)
                 continue
+            print(f"[WARN] search '{term}' ({country}/{lang}): {e}")
             return []
     return []
 
 
-def _fetch_app(app_id: str, country: str):
+def _fetch_app(app_id: str, country: str) -> dict | None:
     for attempt in range(5):
         try:
-            time.sleep(random.uniform(WAIT_MIN, WAIT_MAX))
+            _sleep()
             return gplay_app(app_id, lang="en", country=country)
         except Exception as e:
             msg = str(e).lower()
             if ("429" in msg or "too many" in msg) and attempt < 4:
                 time.sleep(10 + random.random() * 5)
                 continue
+            print(f"[WARN] fetch app {app_id} ({country}): {e}")
             return None
     return None
 
 
-# ──────────────────────────────────────────────
-# DB insert
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# DB INSERT
+# ──────────────────────────────────────────────────────────────────────────────
 
 def _insert_app(app_info: dict, country: str):
     try:
@@ -82,7 +110,6 @@ def _insert_app(app_info: dict, country: str):
             email=app_info.get("developerEmail"),
             website=app_info.get("developerWebsite"),
         )
-
         app_db_id = insert_app(
             developer_id=dev_id,
             store=STORE,
@@ -91,18 +118,16 @@ def _insert_app(app_info: dict, country: str):
             category=app_info.get("genre") or "Unknown",
             country=country,
         )
-
-        version = app_info.get("version")
-        if version:
+        if version := app_info.get("version"):
             insert_app_version(app_db_id, version)
 
     except Exception as e:
         print(f"[DB ERROR] {app_info.get('appId')}: {e}")
 
 
-# ──────────────────────────────────────────────
-# Task processors
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# TASK PROCESSORS
+# ──────────────────────────────────────────────────────────────────────────────
 
 def process_category(country: str, category_id: str):
     langs = ["en"]
@@ -110,92 +135,85 @@ def process_category(country: str, category_id: str):
     if local_lang != "en":
         langs.append(local_lang)
 
-    all_ids = set()
-
+    all_ids: set[str] = set()
     for lang in langs:
-        results = _search_by_term(category_id, country, lang)
-        for r in results:
-            aid = r.get("appId")
-            if aid:
+        for r in _search_by_term(category_id, country, lang):
+            if aid := r.get("appId"):
                 all_ids.add(aid)
 
     for app_id in all_ids:
-        app_info = _fetch_app(app_id, country)
-        if app_info:
+        if app_info := _fetch_app(app_id, country):
             _insert_app(app_info, country)
 
 
 def process_keyword(country: str, keyword: str):
-    results = _search_by_term(keyword, country, "en")
-
-    for r in results:
-        app_id = r.get("appId")
-        if not app_id:
-            continue
-
-        app_info = _fetch_app(app_id, country)
-        if app_info:
-            _insert_app(app_info, country)
+    for r in _search_by_term(keyword, country, "en"):
+        if app_id := r.get("appId"):
+            if app_info := _fetch_app(app_id, country):
+                _insert_app(app_info, country)
 
 
 def process_language(country: str, lang: str, term: str):
-    results = _search_by_term(term, country, lang)
-
-    for r in results:
-        app_id = r.get("appId")
-        if not app_id:
-            continue
-
-        app_info = _fetch_app(app_id, country)
-        if app_info:
-            _insert_app(app_info, country)
+    for r in _search_by_term(term, country, lang):
+        if app_id := r.get("appId"):
+            if app_info := _fetch_app(app_id, country):
+                _insert_app(app_info, country)
 
 
-# ──────────────────────────────────────────────
-# Worker loop
-# ──────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# SINGLE WORKER LOOP
+# ──────────────────────────────────────────────────────────────────────────────
 
-def worker():
-    print("[GOOGLE PLAY WORKER] started")
+def _worker(worker_id: int):
+    print(f"[GP WORKER-{worker_id}] started  region={REGION}", flush=True)
 
     while True:
-        task = fetch_task()
+        task = fetch_task(REGION)
 
         if not task:
             time.sleep(2)
             continue
 
-        task_id, source, country, task_type, payload = task
+        task_id, source, country, task_type, payload, _region = task
+
+        # Safety check — skip tasks that don't belong to this crawler
+        if source != STORE:
+            mark_done(task_id)
+            continue
 
         try:
-            if source != "google_play":
-                mark_done(task_id)
-                continue
-
-            # ── category tasks ─────────────────────
             if task_type == "category":
                 process_category(country, payload)
 
-            # ── keyword tasks ──────────────────────
             elif task_type == "keyword":
                 process_keyword(country, payload)
 
-            # ── language tasks ──────────────────────
             elif task_type == "language":
                 lang, term = payload.split("::", 1)
                 process_language(country, lang, term)
 
-            mark_done(task_id)
+            else:
+                print(f"[GP WORKER-{worker_id}] unknown task_type '{task_type}', skipping")
 
-            print(f"[DONE] {country} | {task_type} | {payload}")
+            mark_done(task_id)
+            print(f"[GP WORKER-{worker_id}][DONE] {country} | {task_type} | {payload}", flush=True)
 
         except Exception as e:
-            print(f"[ERROR] task {task_id}: {e}")
-            # leave task for retry
+            print(f"[GP WORKER-{worker_id}][ERROR] task {task_id}: {e}", flush=True)
+            mark_failed(task_id, error=str(e))
 
-# ──────────────────────────────────────────────
-# ENTRY
-# ──────────────────────────────────────────────
 
-if __name__ == "__main__":
-    worker()
+# ──────────────────────────────────────────────────────────────────────────────
+# ENTRYPOINT  (called from main.py)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def worker():
+    """Spawns WORKER_COUNT threads, each running an independent worker loop."""
+    threads = [
+        threading.Thread(target=_worker, args=(i,), daemon=True)
+        for i in range(WORKER_COUNT)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
