@@ -1,16 +1,22 @@
 import os
+import time
 import threading
 
 from db.schema import create_tables
 from db.crawl_tasks import reset_stuck_tasks
 
-CRAWLER_TYPE = os.environ.get("CRAWLER_TYPE")   # app_store | google_play
-REGION       = os.environ.get("REGION", "default")
+CRAWLER_TYPE  = os.environ.get("CRAWLER_TYPE")   # app_store | google_play
+REGION        = os.environ.get("REGION", "default")
+STARTUP_DELAY = int(os.environ.get("STARTUP_DELAY", 45))
 
 
 def main():
     create_tables()
     reset_stuck_tasks()
+
+    if CRAWLER_TYPE in ("app_store", "google_play"):
+        print(f"[CONTAINER] Waiting {STARTUP_DELAY}s for Tor to bootstrap...", flush=True)
+        time.sleep(STARTUP_DELAY)
 
     if CRAWLER_TYPE == "app_store":
         from crawlers.apple_store import worker
